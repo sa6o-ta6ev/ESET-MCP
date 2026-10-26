@@ -43,6 +43,7 @@ from .composite_tools import (
     eset_search,
     incident_full_context,
     latest_detections,
+    policy_settings,
 )
 from .config import Settings
 from .errors import EsetApiError
@@ -55,6 +56,7 @@ from .observability import (
     observe_tool_duration,
     record_usage,
 )
+from .policy_decode import omit_policy_blobs
 from .response_shaping import apply_fields_projection, cap_response_size
 from .tools_loader import ToolDef, load_all_tools
 
@@ -180,7 +182,55 @@ _COMPOSITE_TOOLS: list[Tool] = [
         },
         annotations=_READ_ONLY.model_copy(update={"title": "ESET latest detections (composite)"}),
     ),
+    Tool(
+        name="policy_settings",
+        description=(
+            "A policy's settings decoded to plain JSON. ESET's get/list policy endpoints only "
+            "return the settings as an encoded blob (omitted from their output) - use this "
+            "tool to read what a policy actually configures. Returns policy metadata, the "
+            "product it targets, console/product version info, and the settings per settings "
+            "file (several documents = the same settings written for different product "
+            "versions). Setting wrappers {ce_value, ce_flags} are unwrapped to the value; "
+            "credential-looking values are redacted. Large policies return a section outline - "
+            "then call again with `path` or `search`."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "policyUuid": {"type": "string", "description": "UUID of the policy."},
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Optional dotted path inside each settings document, e.g. "
+                        "'policy.data.Settings.Firewall' or 'list[0].name'."
+                    ),
+                },
+                "search": {
+                    "type": "string",
+                    "description": (
+                        "Optional case-insensitive text to find in setting names or values; "
+                        "returns matching paths and values only (max 100)."
+                    ),
+                },
+                "include_history": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Include the change log (who changed which section, when).",
+                },
+                "raw_flags": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Keep the raw {ce_value, ce_flags} wrappers instead of unwrapping.",
+                },
+            },
+            "required": ["policyUuid"],
+            "additionalProperties": False,
+        },
+        annotations=_READ_ONLY.model_copy(update={"title": "ESET policy settings, decoded (composite)"}),
+    ),
 ]
+
+_POLICY_BLOB_HINT = "call policy_settings with this policy's uuid to read the decoded settings"
 
 _RESOURCES: list[Resource] = [
     Resource(
@@ -311,16 +361,21 @@ def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
         max_bytes = settings.response_bytes_max
 
         try:
-            composite = await _dispatch_composite(http, name, arguments)
+            composite = await _dispatch_composite(http, name, arguments, max_bytes)
             if composite is not None:
                 if isinstance(composite, dict) and "error" in composite:
                     # Composites report a failed primary fetch as {"error": ...}.
                     raise _ToolError(_to_text(composite), status="eset_error")
                 return _to_text(_shape(composite, fields, max_bytes))
-            result = await _execute_tool(http, tools_by_name[name], arguments)
+            tool = tools_by_name[name]
+            result = await _execute_tool(http, tool, arguments)
         except EsetApiError as e:
             raise _ToolError(f"ESET API error: {e}", status=str(e.status)) from e
 
+        if tool.service == "policy-management":
+            # The encoded settings blob is thousands of useless tokens to the
+            # agent; point it at the decoding tool instead.
+            result = omit_policy_blobs(result, _POLICY_BLOB_HINT)
         shaped = _shape(result, fields, max_bytes)
         if isinstance(shaped, dict) and "_capped" in shaped:
             inc_capped(tool=name)
@@ -530,6 +585,7 @@ async def _dispatch_composite(
     http: EsetHttpClient,
     name: str,
     arguments: dict[str, Any],
+    max_bytes: int,
 ) -> Any:
     """If `name` is one of the composite tools, run it and return its result.
 
@@ -553,5 +609,15 @@ async def _dispatch_composite(
             hours=int(arguments.get("hours", 24)),
             limit=int(arguments.get("limit", 10)),
             severity_min=arguments.get("severity_min"),
+        )
+    if name == "policy_settings":
+        return await policy_settings(
+            http,
+            arguments["policyUuid"],
+            path=arguments.get("path"),
+            search=arguments.get("search"),
+            include_history=bool(arguments.get("include_history", False)),
+            raw_flags=bool(arguments.get("raw_flags", False)),
+            max_bytes=max_bytes,
         )
     return None

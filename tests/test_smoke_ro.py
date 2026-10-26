@@ -11,11 +11,12 @@ pytestmark = pytest.mark.ro
 
 
 async def test_catalog_is_read_only(mcp_session) -> None:
-    """The catalog exposes only read-only tools: generated GET tools + 4 composites."""
+    """The catalog exposes only read-only tools: generated GET tools + composites."""
+    from eset_mcp.server import _COMPOSITE_TOOLS
     from eset_mcp.tools_loader import load_all_tools
     async with mcp_session() as client:
         tools = await client.list_tools()
-        assert len(tools.tools) == len(load_all_tools()) + 4
+        assert len(tools.tools) == len(load_all_tools()) + len(_COMPOSITE_TOOLS)
         for t in tools.tools:
             assert t.annotations and t.annotations.read_only_hint, (
                 f"{t.name} listed without read_only_hint=True"

@@ -41,6 +41,17 @@ cut down to a read-only, single-tenant server. See
   | `device_full_profile(deviceUuid)` | Device record + its detections (last 30 days, newest first) + detection groups + vulnerabilities + recent scans |
   | `incident_full_context(incidentUuid)` | Incident + comments + related detections + affected devices |
   | `latest_detections(hours=24, limit=10, severity_min?)` | Newest detections in a time window, sorted by `occurTime`; v2 → v1 fallback |
+  | `policy_settings(policyUuid, path?, search?, include_history?, raw_flags?)` | A policy's settings decoded to plain JSON (see below) |
+
+- **Policy settings.** ESET returns a policy's settings as an undocumented
+  encoded blob (base64 → `ar` archive → LZMA → JSON, in three variants).
+  `policy_settings` decodes it on the server: `{ce_value, ce_flags}`
+  wrappers are unwrapped, credential-looking values are redacted, `path`
+  selects a section, `search` finds settings by name or value, and
+  `include_history` adds the change log (who changed which part, when).
+  Policies too large for one response come back as a section outline.
+  The blob itself is removed from the generated policy tools' output (it
+  was up to ~180 KB per policy). Decoder: `eset_mcp/policy_decode.py`.
 
 - Every generated tool accepts a `fields` list (server-side projection) and
   responses are capped at `ESET_MCP_RESPONSE_BYTES_MAX` bytes, keeping
@@ -238,7 +249,8 @@ Forked from maciekaz/ESET-MCP at `442dcad` (2026-08-17, v1.0.3).
   applications per device, hostname/IP device filters, v3 incidents and
   indicators).
 - **Added**: usage log + `eset-mcp-stats`; offline end-to-end tests;
-  `scripts/update_specs.py`.
+  `scripts/update_specs.py`; `policy_settings` (server-side decoding of
+  policy settings, verified against all 84 policies of one tenant).
 
 ## License
 

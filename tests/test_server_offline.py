@@ -17,7 +17,7 @@ from eset_mcp import http_client as http_client_module
 from eset_mcp.client_pool import ClientPool
 from eset_mcp.config import Settings
 from eset_mcp.credentials import EnvCredentialResolver
-from eset_mcp.server import build_server
+from eset_mcp.server import _COMPOSITE_TOOLS, build_server
 from eset_mcp.tools_loader import load_all_tools
 
 TOKEN_URL = "https://eu.business-account.iam.eset.systems/oauth/token"
@@ -70,8 +70,9 @@ async def test_server_starts_and_lists_only_read_tools(settings, eset_api) -> No
     finally:
         await pool.close()
     names = {t.name for t in tools}
-    assert len(tools) == len(load_all_tools()) + 4
-    assert {"eset_search", "device_full_profile", "incident_full_context", "latest_detections"} <= names
+    assert len(tools) == len(load_all_tools()) + len(_COMPOSITE_TOOLS)
+    assert {"eset_search", "device_full_profile", "incident_full_context", "latest_detections",
+            "policy_settings"} <= names
     assert all(t.annotations and t.annotations.read_only_hint for t in tools)
     assert not any("installer" in n for n in names)
 
@@ -188,7 +189,6 @@ async def test_unexpected_exception_becomes_tool_error(settings, eset_api) -> No
 def test_every_tool_schema_is_valid_json_schema(settings) -> None:
     from jsonschema.validators import validator_for
 
-    from eset_mcp.server import _COMPOSITE_TOOLS
     schemas = [t.input_schema for t in load_all_tools()] + [t.input_schema for t in _COMPOSITE_TOOLS]
     for schema in schemas:
         validator_for(schema).check_schema(schema)
@@ -237,3 +237,84 @@ async def test_resources_are_readable(settings, eset_api) -> None:
     finally:
         await pool.close()
     assert region.contents[0].text == "eu"
+
+
+# --- policies ---
+POLICIES_URL = "https://eu.policy-management.eset.systems/v2/policies"
+POLICY_TYPE = "type.googleapis.com/Era.Common.DataDefinition.Policy.PolicyData"
+
+
+def _encoded_policy(settings: dict) -> str:
+    import base64
+    doc = {"policy": {"format": "1", "data": settings}}
+    return base64.b64encode(base64.b64encode(json.dumps(doc).encode())).decode()
+
+
+def _policy(uuid: str, settings: dict) -> dict:
+    return {"policy": {"uuid": uuid, "displayName": "Proxy policy", "configuration": {
+        "@type": POLICY_TYPE, "data": _encoded_policy(settings), "product": "eset.local.products.ech",
+        "compressed": False}}}
+
+
+PROXY_SETTINGS = {"ech": {"Settings": {"Proxy": {
+    "Port": {"ce_value": 3128, "ce_flags": 4},
+    "Password": {"ce_value": "c2VjcmV0", "ce_flags": 4},
+}}}}
+
+
+async def test_policy_settings_decodes_and_filters(settings, eset_api) -> None:
+    eset_api.get(f"{POLICIES_URL}/p1").mock(return_value=httpx.Response(200, json=_policy("p1", PROXY_SETTINGS)))
+    pool, client = await _client_for(settings)
+    try:
+        async with client:
+            full = await client.call_tool("policy_settings", {"policyUuid": "p1"})
+            found = await client.call_tool("policy_settings", {"policyUuid": "p1", "search": "port"})
+            section = await client.call_tool(
+                "policy_settings", {"policyUuid": "p1", "path": "policy.data.ech.Settings.Proxy"}
+            )
+    finally:
+        await pool.close()
+    assert not full.is_error
+    out = json.loads(full.content[0].text)
+    assert "omitted" in out["policy"]["configuration"]["data"]
+    [entry] = out["decoded"]
+    assert entry["product"] == "eset.local.products.ech"
+    proxy = entry["settings"]["settings"]["policy"]["data"]["ech"]["Settings"]["Proxy"]
+    assert proxy == {"Port": 3128, "Password": "[redacted]"}
+    matches = json.loads(found.content[0].text)["decoded"][0]["matches"]
+    assert matches == [{"path": "settings:policy.data.ech.Settings.Proxy.Port", "value": 3128}]
+    picked = json.loads(section.content[0].text)["decoded"][0]["settings"]["settings"]
+    assert picked == {"Port": 3128, "Password": "[redacted]"}
+
+
+async def test_policy_settings_outline_when_too_large(settings, eset_api, monkeypatch) -> None:
+    big = {"ech": {"Settings": {f"Section{i}": {f"Key{j}": {"ce_value": "x" * 50, "ce_flags": 4}
+                                                for j in range(40)} for i in range(40)}}}
+    eset_api.get(f"{POLICIES_URL}/p2").mock(return_value=httpx.Response(200, json=_policy("p2", big)))
+    monkeypatch.setenv("ESET_MCP_RESPONSE_BYTES_MAX", "20000")
+    small = Settings.from_env(env_file=None)
+    pool, client = await _client_for(small)
+    try:
+        async with client:
+            result = await client.call_tool("policy_settings", {"policyUuid": "p2"})
+    finally:
+        await pool.close()
+    out = json.loads(result.content[0].text)
+    assert "path=" in out["note"]
+    settings_outline = out["decoded"][0]["settings"]["settings"]["policy"]["data"]
+    assert settings_outline == {"ech": "{1 keys}"}
+
+
+async def test_generated_policy_tools_omit_encoded_blob(settings, eset_api) -> None:
+    eset_api.get(POLICIES_URL).mock(return_value=httpx.Response(
+        200, json={"policies": [_policy("p1", PROXY_SETTINGS)["policy"]]}
+    ))
+    pool, client = await _client_for(settings)
+    try:
+        async with client:
+            result = await client.call_tool(TOOL_BY_PATH["/v2/policies"], {})
+    finally:
+        await pool.close()
+    text = result.content[0].text
+    assert "policy_settings" in text
+    assert _encoded_policy(PROXY_SETTINGS) not in text

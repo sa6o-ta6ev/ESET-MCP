@@ -10,12 +10,14 @@ Currently:
 - `device_full_profile` - device + recent detections/detection groups + vulnerabilities + scans
 - `incident_full_context` - incident + comments + related detections + affected devices
 - `latest_detections`   - newest detections in a time window (v2→v1 fallback, paginated, sorted)
+- `policy_settings`     - a policy's settings decoded from ESET's opaque blob (see policy_decode.py)
 
 Each composite is registered in `server.py` alongside the auto-generated tools.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -24,6 +26,15 @@ from urllib.parse import quote
 
 from .errors import EsetApiError
 from .http_client import EsetHttpClient
+from .policy_decode import (
+    PolicyDecodeError,
+    decode_policy_data,
+    find_policy_data,
+    omit_policy_blobs,
+    outline,
+    search_settings,
+    select_path,
+)
 
 SearchKind = Literal["device", "user", "policy", "group"]
 ALL_KINDS: tuple[SearchKind, ...] = ("device", "user", "policy", "group")
@@ -493,3 +504,93 @@ def _severity_set_at_least(min_level: str) -> set[str] | None:
         return None
     idx = _SEVERITY_ORDER.index(norm)
     return {f"SEVERITY_LEVEL_{lvl}" for lvl in _SEVERITY_ORDER[idx:]}
+
+
+# --- Composite #5: decoded policy settings ---
+_POLICY_SEARCH_LIMIT = 100
+
+
+async def policy_settings(
+    http: EsetHttpClient,
+    policy_uuid: str,
+    *,
+    path: str | None = None,
+    search: str | None = None,
+    include_history: bool = False,
+    raw_flags: bool = False,
+    max_bytes: int = 0,
+) -> dict[str, Any]:
+    """Fetch a policy and return its settings decoded to plain JSON.
+
+    ESET returns the settings as a multi-layer encoded blob (base64 → ar
+    archive → LZMA → JSON); see :mod:`eset_mcp.policy_decode`. ``path``
+    selects one section, ``search`` returns matching settings only. When the
+    full result would exceed ``max_bytes``, the settings are replaced by an
+    outline of their sections so the caller can narrow down with ``path``.
+    """
+    try:
+        resp = await http.request(
+            "GET", "policy-management", f"/v2/policies/{quote(policy_uuid, safe='')}"
+        )
+    except EsetApiError as e:
+        return {"error": f"Policy fetch failed: {e}"}
+
+    policy = resp.get("policy", resp) if isinstance(resp, dict) else resp
+    containers = find_policy_data(policy)
+    result: dict[str, Any] = {"policy": omit_policy_blobs(policy, "decoded below")}
+    if not containers:
+        result["note"] = "This policy carries no encoded settings (PolicyData)."
+        return result
+
+    decoded: list[dict[str, Any]] = []
+    for container in containers:
+        try:
+            d = decode_policy_data(
+                container["data"],
+                compressed=bool(container.get("compressed")),
+                include_history=include_history,
+                raw_flags=raw_flags,
+            )
+        except PolicyDecodeError as e:
+            decoded.append({"product": container.get("product"), "error": str(e)})
+            continue
+        entry: dict[str, Any] = {"product": container.get("product"), **d}
+        if path:
+            entry["settings"] = {
+                name: _map_documents(docs, lambda doc: select_path(doc, path))
+                for name, docs in d["settings"].items()
+            }
+        if search:
+            matches = []
+            for name, docs in d["settings"].items():
+                doc_list = docs if isinstance(docs, list) and len(docs) > 1 and all(isinstance(x, dict) for x in docs) else [docs]
+                for i, doc in enumerate(doc_list):
+                    prefix = name if len(doc_list) == 1 else f"{name}#{i}"
+                    for hit in search_settings(doc, search, _POLICY_SEARCH_LIMIT - len(matches)):
+                        matches.append({**hit, "path": f"{prefix}:{hit['path']}"})
+            entry["settings"] = None
+            entry["matches"] = matches
+            entry["matchesTruncated"] = len(matches) >= _POLICY_SEARCH_LIMIT
+        decoded.append(entry)
+    result["decoded"] = decoded
+
+    if max_bytes and not path and not search and len(json.dumps(result, ensure_ascii=False)) > max_bytes:
+        for entry in decoded:
+            if entry.get("settings"):
+                entry["settings"] = {
+                    name: _map_documents(docs, lambda doc: outline(doc, depth=3))
+                    for name, docs in entry["settings"].items()
+                }
+        result["note"] = (
+            "Settings are too large to return in full; showing their section outline. "
+            "Call again with path='<section.subsection>' (e.g. a key from the outline) "
+            "or search='<text>' to get values."
+        )
+    return result
+
+
+def _map_documents(docs: Any, fn: Any) -> Any:
+    """Apply ``fn`` to one settings document, or to each when there are several."""
+    if isinstance(docs, list) and len(docs) > 1 and all(isinstance(d, dict) for d in docs):
+        return [fn(d) for d in docs]
+    return fn(docs)

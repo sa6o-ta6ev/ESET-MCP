@@ -27,6 +27,10 @@ Issues in the original project can also be reported upstream:
   field whose name matches `password` / `secret` / `token` /
   `authorization` / `cookie` / `api_key` / `bearer` / `credentials` /
   `cf-access-client-*`. `tests/test_observability.py`.
+- **Policy credentials are redacted.** Decoded policy settings whose name
+  looks like a credential (password, secret, token, private key) are
+  replaced with `[redacted]`; ESET stores them encrypted anyway.
+  `tests/test_policy_decode.py`.
 - **Usage log carries no data.** Records hold tool name, success flag,
   status and duration only - never arguments or results.
   `tests/test_usage.py`.
