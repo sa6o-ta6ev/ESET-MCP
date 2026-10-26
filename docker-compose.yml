@@ -1,30 +1,31 @@
 services:
-  # HTTP mode (Streamable HTTP) on 127.0.0.1:8765/mcp, built from this repo.
+  # Long-running MCP server (Streamable HTTP) for Claude Code on this machine.
+  # Use the Makefile: `make build`, `make up`, `make register`.
   #
   # The endpoint has NO authentication of its own: anyone who can reach it
-  # can query the tenant in .env. The port is published on localhost only;
-  # put an authenticating proxy in front before exposing it further.
-  #
-  #   docker compose up -d --build
-  eset-mcp-http:
+  # can query the tenant in .env. It is published on 127.0.0.1 only; put an
+  # authenticating proxy in front before exposing it further.
+  eset-mcp:
     build: .
-    container_name: eset-mcp-http
+    image: eset-mcp:local
+    container_name: eset-mcp
     restart: unless-stopped
     env_file: .env
     environment:
       ESET_MCP_TRANSPORT: http
       ESET_MCP_HTTP_HOST: 0.0.0.0   # inside the container; published on localhost below
       ESET_MCP_HTTP_PORT: "8765"
+      ESET_MCP_USAGE_LOG: /data/usage.jsonl
     ports:
-      - "127.0.0.1:8765:8765"
+      - "127.0.0.1:${ESET_MCP_PORT:-8765}:8765"
+    volumes:
+      - eset-mcp-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8765), 2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
-  # stdio one-shot (Claude Desktop / Claude Code launching it via docker):
-  #   docker compose run --rm eset-mcp-stdio
-  eset-mcp-stdio:
-    build: .
-    profiles: ["stdio"]
-    env_file: .env
-    environment:
-      ESET_MCP_TRANSPORT: stdio
-    stdin_open: true
-    tty: false
+volumes:
+  eset-mcp-data:

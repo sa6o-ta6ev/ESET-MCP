@@ -57,27 +57,42 @@ its own API, which this server does not cover.
 
 ## Quick start (local, Claude Code)
 
-Requirements: Python ≥ 3.11 and [uv](https://docs.astral.sh/uv/).
+Requirements: Docker with the compose plugin, and `make`.
 
 1. Create a **dedicated read-only API user** in ESET Business Account /
    ESET PROTECT Hub (User management → new user with a read-only
    permission set → enable the **Integrations** toggle). The console
    Administrator account cannot use the API.
-2. Install and configure:
+2. Configure, build and start:
 
    ```bash
-   uv sync --locked            # creates .venv with the pinned dependencies
-   cp .env.example .env        # then fill in ESET_USER / ESET_PASSWORD / ESET_REGION
+   cp .env.example .env        # fill in ESET_USER / ESET_PASSWORD / ESET_REGION
+   make build
+   make up                     # http://127.0.0.1:8765/mcp/, restarts with Docker
+   make register               # adds it to Claude Code (user scope), once
    ```
 
-3. Register it with Claude Code (stdio - Claude Code starts the server):
+   Check it with `/mcp` inside Claude Code.
 
-   ```bash
-   claude mcp add eset --scope user -- "$PWD/.venv/bin/eset-mcp"
-   ```
+| Target | What it does |
+|---|---|
+| `make build` | Build the image `eset-mcp:local` (dependencies from `uv.lock`) |
+| `make up` / `make down` | Start (and wait until healthy) / stop the container |
+| `make restart` | Recreate the container, e.g. after editing `.env` |
+| `make logs` / `make ps` | Follow logs / show status |
+| `make stats` | Tool-usage statistics from the container's volume |
+| `make register` / `make unregister` | Add / remove the server in Claude Code |
+| `make test` / `make lint` / `make check-specs` | Development tasks (run locally with uv) |
 
-   The server reads `.env` from the repository root, so it works from any
-   directory. Check it with `/mcp` inside Claude Code.
+The container runs the HTTP transport, published on `127.0.0.1` only
+(override the port with `make up ESET_MCP_PORT=9000`). The usage log lives
+in the `eset-mcp-data` volume and survives restarts and rebuilds.
+
+**Without Docker** (Python ≥ 3.11 and [uv](https://docs.astral.sh/uv/)):
+`uv sync --locked`, then
+`claude mcp add eset --scope user -- "$PWD/.venv/bin/eset-mcp"` - Claude
+Code starts the server itself over stdio and it reads `.env` from the
+repository root.
 
 ## Configuration
 
@@ -105,10 +120,12 @@ All settings live in `.env` (see [`.env.example`](.env.example)).
 Set `ESET_MCP_USAGE_LOG` to record one JSON line per tool call: timestamp,
 tool name, success flag, status (`ok`, an ESET HTTP status such as `404`,
 or an internal reason) and duration. Arguments and results are never
-recorded. Summarise with:
+recorded. With `make up` this is on automatically (`/data/usage.jsonl` in the
+container's volume). Summarise with:
 
 ```bash
-.venv/bin/eset-mcp-stats ~/.local/state/eset-mcp/usage.jsonl
+make stats                                               # container
+.venv/bin/eset-mcp-stats ~/.local/state/eset-mcp/usage.jsonl   # without Docker
 ```
 
 ```
@@ -146,8 +163,8 @@ ESET_PASSWORD=...
 ## HTTP transport
 
 ```bash
-ESET_MCP_TRANSPORT=http .venv/bin/eset-mcp     # http://127.0.0.1:8765/mcp
-# or: docker compose up -d --build
+make up                                        # container, http://127.0.0.1:8765/mcp/
+ESET_MCP_TRANSPORT=http .venv/bin/eset-mcp     # or directly, without Docker
 ```
 
 The HTTP endpoint is **stateless** (no MCP sessions) and has **no

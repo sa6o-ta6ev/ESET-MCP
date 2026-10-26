@@ -36,8 +36,11 @@ ENV ESET_MCP_TRANSPORT=stdio \
 EXPOSE 8765
 
 # Drop privileges. Non-root by uid 10001 so it never collides with a
-# host user.
-RUN useradd --create-home --uid 10001 esetmcp && chown -R esetmcp:esetmcp /app
+# host user. /data holds the usage log; a named volume mounted there
+# inherits this ownership on first use.
+RUN useradd --create-home --uid 10001 esetmcp \
+    && mkdir -p /data \
+    && chown -R esetmcp:esetmcp /app /data
 USER esetmcp
 
 ENTRYPOINT ["eset-mcp"]
