@@ -46,6 +46,7 @@ from .composite_tools import (
     policy_settings,
 )
 from .config import Settings
+from .enrich import enrich
 from .errors import EsetApiError
 from .http_client import EsetHttpClient
 from .observability import (
@@ -153,7 +154,10 @@ _COMPOSITE_TOOLS: list[Tool] = [
             "Use this - NOT the raw list_detections tools - when answering "
             "'what's the latest detection / what happened recently'. The raw list endpoints "
             "do NOT sort by date, so a first-page sort silently returns stale rows. "
-            "This composite does v2→v1 fallback, paginates the time window, and sorts locally."
+            "This composite does v2→v1 fallback, paginates the time window, and sorts locally. "
+            "Detection paths may use Windows device names (\\Device\\HarddiskVolumeN\\...) that "
+            "cannot be mapped to drive letters here; the v3 indicators for the same event "
+            "usually carry the normal C:\\ path."
         ),
         input_schema={
             "type": "object",
@@ -367,6 +371,8 @@ def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
                 if isinstance(composite, dict) and "error" in composite:
                     # Composites report a failed primary fetch as {"error": ...}.
                     raise _ToolError(_to_text(composite), status="eset_error")
+                if name != "policy_settings":  # decoded settings are not API records
+                    enrich(composite)
                 return _to_text(_shape(composite, fields, max_bytes))
             tool = tools_by_name[name]
             result = await _execute_tool(http, tool, arguments)
@@ -377,6 +383,8 @@ def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
             # The encoded settings blob is thousands of useless tokens to the
             # agent; point it at the decoding tool instead.
             result = omit_policy_blobs(result, _POLICY_BLOB_HINT)
+        # Fix known ESET data quirks (versions, disk units, hash fields, ...).
+        enrich(result)
         shaped = _shape(result, fields, max_bytes)
         if isinstance(shaped, dict) and "_capped" in shaped:
             inc_capped(tool=name)

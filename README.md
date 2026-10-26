@@ -59,6 +59,21 @@ cut down to a read-only, single-tenant server. See
 - Every generated tool accepts a `fields` list (server-side projection) and
   responses are capped at `ESET_MCP_RESPONSE_BYTES_MAX` bytes, keeping
   `nextPageToken` so the client can page on.
+- **Data fixes** (`eset_mcp/enrich.py`), applied to every tool result -
+  each verified against a real tenant; original values are kept:
+  - version objects with only `name` filled ("13.3.1192.0", major/minor/patch
+    all 0) get major/minor/patch from the name, plus `build`, so versions
+    can be compared;
+  - disk `capacityBytes` is actually KiB - `capacityGB` is added;
+  - a SHA-256 in `objectHashSha1` (v1 detections) is moved to
+    `objectHashSha256`;
+  - durations like `triageDuration: "339664.8s"` get `triageDurationHuman`
+    ("3d 22h 21m");
+  - incident descriptions with literal `\n` escapes are unescaped (never
+    when the text contains other backslashes, e.g. Windows paths).
+
+  Policy change logs also split `user_id` (`"<uuid>;PR;PW;SR;SW;"`) into
+  `user` and `userFlags`.
 - **Resources**: `eset://config/region`, `eset://config/deployment`,
   `eset://config/tools-catalog`, `eset://docs/rate-limits`.
 - **Prompts**: `audit_inactive_devices(days)`, `vulnerability_report`,

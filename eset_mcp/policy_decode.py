@@ -464,18 +464,29 @@ def _decode_history(blob: bytes, include: bool, errors: list[str]) -> dict[str, 
 
 
 def _add_readable_times(changelog: Any) -> None:
-    """Add ``time`` (ISO 8601, UTC) next to each Unix ``timestamp`` in the change log.
+    """Make change-log entries readable, in place.
 
     Entries look like ``{"change_id", "user_id", "timestamp", "modified_parts",
-    "orig_data"}`` with ``timestamp`` in seconds.
+    "orig_data"}``. Adds ``time`` (ISO 8601, UTC) next to the Unix
+    ``timestamp``, and splits ``user_id`` - observed as
+    ``"<uuid>;PR;PW;SR;SW;"`` or ``"<uuid>;PR;PW;-;-;"`` - into ``user`` and
+    ``userFlags`` (``-`` placeholders dropped). The flags are undocumented;
+    they look like read/write permissions of the editing user.
     """
     entries = changelog.get("changes") if isinstance(changelog, dict) else changelog
     if not isinstance(entries, list):
         return
     for entry in entries:
-        ts = entry.get("timestamp") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict):
+            continue
+        ts = entry.get("timestamp")
         if isinstance(ts, (int, float)) and 0 < ts < 1e11:
             entry["time"] = _dt.datetime.fromtimestamp(ts, _dt.UTC).isoformat(timespec="seconds")
+        user_id = entry.get("user_id")
+        if isinstance(user_id, str) and ";" in user_id:
+            user, *flags = user_id.split(";")
+            entry["user"] = user
+            entry["userFlags"] = [f for f in flags if f and f != "-"]
 
 
 def _count_edits(changelog: Any) -> int | None:

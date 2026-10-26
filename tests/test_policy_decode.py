@@ -71,8 +71,8 @@ CURRENT = {"policy": {"product": "ech", "version": "4.2.0", "data": {
 OLDER = {"policy": {"product": "ech", "version": "1.0.0", "data": {
     "Settings": {"Proxy": {"Port": setting(3128, ce_type=6)}}}}}
 FEATURE = {"policy": {"feature": "Connectivity", "version": "1.0", "data": {"Mode": setting(2)}}}
-CHANGELOG = {"changes": [{"change_id": "c1", "user_id": "u1", "timestamp": 1792591079,
-                          "modified_parts": ["Proxy"], "orig_data": "1.ar.xz"}]}
+CHANGELOG = {"changes": [{"change_id": "c1", "user_id": "63ba39d6-0000-4000-8000-000000000001;PR;PW;-;-;",
+                          "timestamp": 1792591079, "modified_parts": ["Proxy"], "orig_data": "1.ar.xz"}]}
 
 
 def archive_policy() -> str:
@@ -113,6 +113,8 @@ def test_history_change_log_with_readable_times() -> None:
     assert full["storedVersions"] == [{"name": "1.ar.xz", "bytes": full["storedVersions"][0]["bytes"]}]
     change = full["changeLog"]["changes"][0]
     assert change["time"] == "2026-10-21T13:57:59+00:00"
+    assert change["user"] == "63ba39d6-0000-4000-8000-000000000001"
+    assert change["userFlags"] == ["PR", "PW"]
     summary = decode_policy_data(archive_policy())["history"]
     assert summary["storedVersions"] == 1 and summary["edits"] == 1
 
