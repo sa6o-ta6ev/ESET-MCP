@@ -28,19 +28,6 @@ class EsetApiError(Exception):
         return " | ".join(parts)
 
 
-@dataclass
-class ModeForbiddenError(Exception):
-    """Raised when an RW tool is invoked while the server is in RO mode."""
-    tool_name: str
-
-    def __str__(self) -> str:
-        return (
-            f"Tool '{self.tool_name}' requires RW mode, but the MCP server is in RO mode "
-            f"(ESET_MODE=RO). Set ESET_MODE=RW in .env and restart the server if you "
-            f"intend to perform a mutating action."
-        )
-
-
 def map_http_error(status: int, body: str, endpoint: str, request_id: str | None) -> EsetApiError:
     """Return an EsetApiError with an agent-readable description.
 
@@ -59,8 +46,7 @@ def map_http_error(status: int, body: str, endpoint: str, request_id: str | None
         403: (
             "Forbidden - the API account lacks permission for this operation. "
             "In ESET PROTECT Hub → Permission Sets, verify the user has the right "
-            "Permission Set for this resource and group. If this is an RW operation, "
-            "the account may be read-only."
+            "Permission Set for this resource and group."
         ),
         404: "Not Found - resource does not exist (check the UUID) or the 202 cache expired.",
         409: "Conflict - e.g. resource already exists or stale ETag.",

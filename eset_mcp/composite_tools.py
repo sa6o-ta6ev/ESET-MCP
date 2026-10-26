@@ -7,7 +7,7 @@ sub-calls return 403/404 (e.g. a tenant without vulnerability-management access)
 
 Currently:
 - `eset_search`         - cross-cutting substring search over devices/users/policies/groups
-- `device_full_profile` - device + parent group + recent detections + vulnerabilities + OS vulns
+- `device_full_profile` - device + recent detections/detection groups + vulnerabilities + scans
 - `incident_full_context` - incident + comments + related detections + affected devices
 - `latest_detections`   - newest detections in a time window (v2→v1 fallback, paginated, sorted)
 
@@ -20,6 +20,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
+from urllib.parse import quote
 
 from .errors import EsetApiError
 from .http_client import EsetHttpClient
@@ -261,23 +262,38 @@ def _walk(obj: Any, dotted: str) -> Any:
 
 
 # --- Composite #2: full device profile ---
+# Detection look-back for the device profile. The list endpoints don't sort by
+# time, so we fetch the window and sort locally (see latest_detections).
+_DEVICE_DETECTION_WINDOW_DAYS = 30
+_DEVICE_DETECTIONS_RETURNED = 10
+
+
 async def device_full_profile(http: EsetHttpClient, device_uuid: str) -> dict[str, Any]:
     """One-shot snapshot of a device - main record + detections + vulnerabilities.
 
     Each sub-section degrades gracefully: if the tenant lacks permission for
     vulnerabilities or incident-management, those keys carry an error stub
     instead of failing the whole call.
+
+    ``/v2/detections`` has no ``deviceUuid`` filter, so per-device v2 data
+    comes from ``/v2/detection-groups`` (which has one). ``/v1/detections``
+    is filtered by device and time window, then sorted newest-first.
     """
     try:
-        device = await http.request("GET", "device-management", f"/v1/devices/{device_uuid}")
+        device = await http.request("GET", "device-management", f"/v1/devices/{quote(device_uuid, safe='')}")
     except EsetApiError as e:
         return {"error": f"Device fetch failed: {e}"}
 
-    detections_v2, detections_v1, dev_vulns, os_vulns, recent_scans = await asyncio.gather(
-        _safe_get(http, "incident-management", "/v2/detections",
-                  query={"pageSize": 10}),  # v2 has no deviceUuid filter - best-effort
+    end = datetime.now(UTC)
+    window = {
+        "startTime": (end - timedelta(days=_DEVICE_DETECTION_WINDOW_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "endTime": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    detections_v1, detection_groups, dev_vulns, os_vulns, recent_scans = await asyncio.gather(
         _safe_get(http, "incident-management", "/v1/detections",
-                  query={"pageSize": 10, "deviceUuid": device_uuid}),
+                  query={"pageSize": 1000, "deviceUuid": device_uuid, **window}),
+        _safe_get(http, "incident-management", "/v2/detection-groups",
+                  query={"pageSize": _DEVICE_DETECTIONS_RETURNED, "deviceUuid": device_uuid, **window}),
         _safe_get(http, "vulnerability-management", "/v1/device-vulnerabilities",
                   query={"pageSize": 10, "deviceUuid": device_uuid}),
         _safe_get(http, "vulnerability-management", "/v1/device-os-vulnerabilities",
@@ -286,10 +302,20 @@ async def device_full_profile(http: EsetHttpClient, device_uuid: str) -> dict[st
                   query={"pageSize": 5, "deviceUuid": device_uuid}),
     )
 
+    if isinstance(detections_v1, dict) and "_error" not in detections_v1:
+        dets = list(detections_v1.get("detections") or [])
+        dets.sort(key=lambda d: d.get("occurTime", "") or "", reverse=True)
+        detections_v1 = {
+            "windowDays": _DEVICE_DETECTION_WINDOW_DAYS,
+            "totalInWindow": len(dets),
+            "truncated": bool(detections_v1.get("nextPageToken")),
+            "detections": dets[:_DEVICE_DETECTIONS_RETURNED],
+        }
+
     return {
         "device": device,
         "recentDetections": detections_v1,
-        "recentDetectionsV2": detections_v2,
+        "recentDetectionGroups": detection_groups,
         "deviceVulnerabilities": dev_vulns,
         "osVulnerabilities": os_vulns,
         "recentScans": recent_scans,
@@ -303,10 +329,9 @@ async def incident_full_context(http: EsetHttpClient, incident_uuid: str) -> dic
     To stay within rate limits we cap the number of fan-out fetches (detections
     + devices) at 10 each - anything beyond that surfaces as a UUID list.
     """
+    incident_path = f"/v2/incidents/{quote(incident_uuid, safe='')}"
     try:
-        incident_resp = await http.request(
-            "GET", "incident-management", f"/v2/incidents/{incident_uuid}"
-        )
+        incident_resp = await http.request("GET", "incident-management", incident_path)
     except EsetApiError as e:
         return {"error": f"Incident fetch failed: {e}"}
 
@@ -315,7 +340,7 @@ async def incident_full_context(http: EsetHttpClient, incident_uuid: str) -> dic
     dev_uuids = list(incident.get("deviceUuids") or [])[:10]
 
     comments, detections, devices = await asyncio.gather(
-        _safe_get(http, "incident-management", f"/v2/incidents/{incident_uuid}/comments"),
+        _safe_get(http, "incident-management", f"{incident_path}/comments"),
         _gather_by_uuid(http, "incident-management", "/v2/detections/{uuid}", det_uuids),
         _gather_by_uuid(http, "device-management", "/v1/devices/{uuid}", dev_uuids),
     )
@@ -348,7 +373,7 @@ async def _gather_by_uuid(
     if not uuids:
         return []
     results = await asyncio.gather(
-        *(_safe_get(http, service, path_template.replace("{uuid}", u)) for u in uuids)
+        *(_safe_get(http, service, path_template.replace("{uuid}", quote(str(u), safe=""))) for u in uuids)
     )
     return list(results)
 

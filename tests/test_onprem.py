@@ -4,14 +4,13 @@ These run entirely without network - they exercise:
 - Settings parsing of ESET_DEPLOYMENT / ESET_ONPREM_SERVER_URL / ESET_ONPREM_VERIFY_SSL
 - Credentials.cache_key() distinguishing cloud vs on-prem (and same user on
   two different on-prem URLs)
-- Header parsing in the ASGI middleware (X-ESET-Server-URL precedence)
 - OnPremTokenManager wire format against a mocked HTTP server (respx)
-- On-prem path overrides loaded from openapi/onprem-path-overrides.json
+- On-prem path overrides (ToolDef.path_for)
 - httpx verify=… wiring driven by Credentials.verify_ssl
 """
 from __future__ import annotations
 
-import base64
+import json
 
 import httpx
 import pytest
@@ -19,17 +18,10 @@ import respx
 
 from eset_mcp.auth import CloudTokenManager, OnPremTokenManager, make_token_manager
 from eset_mcp.config import Settings
-from eset_mcp.credentials import (
-    BasicAuthCredentialResolver,
-    CredentialResolverError,
-    Credentials,
-    EnvCredentialResolver,
-    normalize_server_url_header,
-    request_credentials,
-)
+from eset_mcp.credentials import Credentials, EnvCredentialResolver
 from eset_mcp.http_client import EsetHttpClient
 from eset_mcp.regions import resolve_auth_url, resolve_base_url
-from eset_mcp.tools_loader import ToolDef, load_all_tools
+from eset_mcp.tools_loader import ToolDef
 
 
 # --- Settings (env parsing) ---
@@ -40,10 +32,8 @@ def _set_env(monkeypatch, **overrides) -> None:
         if key.startswith("ESET_"):
             monkeypatch.delenv(key, raising=False)
     baseline = {
-        "ESET_AUTH_MODE": "env",
         "ESET_USER": "u@example.com",
         "ESET_PASSWORD": "pw",
-        "ESET_MODE": "RO",
         "ESET_REGION": "eu",
         "ESET_MCP_TRANSPORT": "stdio",
     }
@@ -60,23 +50,10 @@ def test_settings_default_deployment_is_cloud(monkeypatch) -> None:
     assert s.onprem_verify_ssl is True
 
 
-def test_settings_onprem_requires_server_url_in_env_mode(monkeypatch) -> None:
+def test_settings_onprem_requires_server_url(monkeypatch) -> None:
     _set_env(monkeypatch, ESET_DEPLOYMENT="onprem")
     with pytest.raises(RuntimeError, match="ESET_ONPREM_SERVER_URL"):
         Settings.from_env(env_file=None)
-
-
-def test_settings_onprem_basic_mode_allows_empty_url(monkeypatch) -> None:
-    """basic auth + on-prem with no env URL is fine - clients send the header."""
-    _set_env(
-        monkeypatch,
-        ESET_DEPLOYMENT="onprem",
-        ESET_AUTH_MODE="basic",
-        ESET_MCP_TRANSPORT="http",
-    )
-    s = Settings.from_env(env_file=None)
-    assert s.deployment == "onprem"
-    assert s.onprem_server_url == ""
 
 
 def test_settings_onprem_server_url_normalised(monkeypatch) -> None:
@@ -152,49 +129,6 @@ def test_cache_key_password_hash_changes_when_password_rotates() -> None:
     assert a.cache_key() != b.cache_key()
 
 
-def test_cache_key_cf_token_rotation_creates_new_pool_entry() -> None:
-    """Different CF Access secret for the same on-prem URL → distinct pool entry.
-
-    Important: the httpx default headers carrying the CF tokens are baked in
-    at construction time, so swapping the secret on a shared client would
-    race. The cache key must reflect the secret so the pool hands out a
-    fresh client when it changes.
-    """
-    base = dict(user="u", password="p", region="eu",
-                deployment="onprem", server_url="https://protect.local:9443")
-    with_a = Credentials(**base, cf_access_client_id="id", cf_access_client_secret="A")
-    with_b = Credentials(**base, cf_access_client_id="id", cf_access_client_secret="B")
-    no_cf = Credentials(**base)
-    keys = {with_a.cache_key(), with_b.cache_key(), no_cf.cache_key()}
-    assert len(keys) == 3, "expected three distinct pool keys (A, B, no-CF)"
-    # CF id alone (without secret) is never used - only secret hash distinguishes.
-    assert with_a.cache_key()[4] != ""
-    assert no_cf.cache_key()[4] == ""
-
-
-# --- Header normalisation (middleware helpers) ---
-def test_normalize_server_url_header_empty_returns_blank() -> None:
-    assert normalize_server_url_header(None) == ""
-    assert normalize_server_url_header("") == ""
-
-
-def test_normalize_server_url_header_strips_trailing_slash() -> None:
-    assert (
-        normalize_server_url_header("https://protect.example.com:9443/")
-        == "https://protect.example.com:9443"
-    )
-
-
-def test_normalize_server_url_header_rejects_http() -> None:
-    with pytest.raises(CredentialResolverError, match="https"):
-        normalize_server_url_header("http://protect.example.com:9443")
-
-
-def test_normalize_server_url_header_rejects_path() -> None:
-    with pytest.raises(CredentialResolverError, match="path"):
-        normalize_server_url_header("https://protect.example.com:9443/api")
-
-
 # --- Region/URL resolution ---
 def test_resolve_base_url_cloud_per_service() -> None:
     c = Credentials(user="u", password="pw", region="eu")
@@ -225,7 +159,7 @@ def test_resolve_base_url_onprem_without_server_url_raises() -> None:
         resolve_base_url(bad, "device-management")
 
 
-# --- EnvCredentialResolver / BasicAuthCredentialResolver ---
+# --- EnvCredentialResolver ---
 def test_env_resolver_propagates_onprem_settings(monkeypatch) -> None:
     _set_env(
         monkeypatch,
@@ -239,158 +173,18 @@ def test_env_resolver_propagates_onprem_settings(monkeypatch) -> None:
     assert c.deployment == "onprem"
     assert c.server_url == "https://protect.local:9443"
     assert c.verify_ssl is False
+    assert c.domain_user is False
 
 
-def test_basic_resolver_reads_contextvar(monkeypatch) -> None:
-    _set_env(monkeypatch)
-    s = Settings.from_env(env_file=None)
-    r = BasicAuthCredentialResolver(s)
-    # Without anything in the ContextVar → error.
-    with pytest.raises(CredentialResolverError):
-        r.resolve()
-    # With creds set in the ContextVar → returned as-is.
-    creds = Credentials(user="x", password="y", region="us",
-                        deployment="onprem", server_url="https://x:9443")
-    tok = request_credentials.set(creds)
-    try:
-        assert r.resolve() == creds
-    finally:
-        request_credentials.reset(tok)
-
-
-# --- Middleware (X-ESET-Server-URL → on-prem) ---
-def _build_app_with_middleware(settings: Settings):
-    """Tiny Starlette app whose only job is to expose what the middleware stashed."""
-    from starlette.applications import Starlette
-    from starlette.responses import JSONResponse
-    from starlette.routing import Route
-
-    from eset_mcp.middleware import BasicAuthCredentialsMiddleware
-
-    async def _echo(_request):
-        creds = request_credentials.get()
-        if creds is None:
-            return JSONResponse({"error": "no creds"}, status_code=500)
-        return JSONResponse({
-            "user": creds.user,
-            "deployment": creds.deployment,
-            "region": creds.region,
-            "server_url": creds.server_url,
-            "verify_ssl": creds.verify_ssl,
-        })
-
-    app = Starlette(routes=[Route("/echo", _echo)])
-    app.add_middleware(BasicAuthCredentialsMiddleware, settings=settings)
-    return app
-
-
-def _basic_header(user: str = "u", pw: str = "pw") -> str:
-    token = base64.b64encode(f"{user}:{pw}".encode()).decode()
-    return f"Basic {token}"
-
-
-async def test_middleware_no_override_uses_cloud_default(monkeypatch) -> None:
-    _set_env(monkeypatch, ESET_AUTH_MODE="basic", ESET_MCP_TRANSPORT="http")
-    s = Settings.from_env(env_file=None)
-    app = _build_app_with_middleware(s)
-
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        r = await client.get("/echo", headers={"authorization": _basic_header()})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["deployment"] == "cloud"
-    assert body["region"] == "eu"
-    assert body["server_url"] == ""
-
-
-async def test_middleware_server_url_header_switches_to_onprem(monkeypatch) -> None:
-    _set_env(monkeypatch, ESET_AUTH_MODE="basic", ESET_MCP_TRANSPORT="http")
-    s = Settings.from_env(env_file=None)
-    app = _build_app_with_middleware(s)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        r = await client.get(
-            "/echo",
-            headers={
-                "authorization": _basic_header(),
-                "x-eset-server-url": "https://protect.client-a.local:9443",
-            },
-        )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["deployment"] == "onprem"
-    assert body["server_url"] == "https://protect.client-a.local:9443"
-
-
-async def test_middleware_server_url_wins_over_region(monkeypatch) -> None:
-    """Mixing X-ESET-Server-URL with X-ESET-Region is fine; URL wins (it's on-prem)."""
-    _set_env(monkeypatch, ESET_AUTH_MODE="basic", ESET_MCP_TRANSPORT="http")
-    s = Settings.from_env(env_file=None)
-    app = _build_app_with_middleware(s)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        r = await client.get(
-            "/echo",
-            headers={
-                "authorization": _basic_header(),
-                "x-eset-region": "us",
-                "x-eset-server-url": "https://protect.client-a.local:9443",
-            },
-        )
-    body = r.json()
-    assert body["deployment"] == "onprem"  # URL won; region is ignored for on-prem routing
-
-
-async def test_middleware_invalid_server_url_returns_400(monkeypatch) -> None:
-    _set_env(monkeypatch, ESET_AUTH_MODE="basic", ESET_MCP_TRANSPORT="http")
-    s = Settings.from_env(env_file=None)
-    app = _build_app_with_middleware(s)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        r = await client.get(
-            "/echo",
-            headers={
-                "authorization": _basic_header(),
-                "x-eset-server-url": "http://protect.local:9443",  # http, not https
-            },
-        )
-    assert r.status_code == 400
-
-
-async def test_middleware_env_onprem_fallback_when_header_absent(monkeypatch) -> None:
-    """ESET_DEPLOYMENT=onprem + valid server URL → request inherits env default."""
+def test_env_resolver_propagates_domain_user(monkeypatch) -> None:
     _set_env(
         monkeypatch,
-        ESET_AUTH_MODE="basic",
-        ESET_MCP_TRANSPORT="http",
         ESET_DEPLOYMENT="onprem",
-        ESET_ONPREM_SERVER_URL="https://protect.env-default.local:9443",
+        ESET_ONPREM_SERVER_URL="https://protect.local:9443",
+        ESET_ONPREM_DOMAIN_USER="true",
     )
-    s = Settings.from_env(env_file=None)
-    app = _build_app_with_middleware(s)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        r = await client.get("/echo", headers={"authorization": _basic_header()})
-    body = r.json()
-    assert body["deployment"] == "onprem"
-    assert body["server_url"] == "https://protect.env-default.local:9443"
-
-
-async def test_middleware_env_onprem_no_url_no_header_returns_400(monkeypatch) -> None:
-    _set_env(
-        monkeypatch,
-        ESET_AUTH_MODE="basic",
-        ESET_MCP_TRANSPORT="http",
-        ESET_DEPLOYMENT="onprem",
-        # No ESET_ONPREM_SERVER_URL - must be supplied per request.
-    )
-    s = Settings.from_env(env_file=None)
-    app = _build_app_with_middleware(s)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        r = await client.get("/echo", headers={"authorization": _basic_header()})
-    assert r.status_code == 400
+    c = EnvCredentialResolver(Settings.from_env(env_file=None)).resolve()
+    assert c.domain_user is True
 
 
 # --- OnPremTokenManager wire format (respx mock) ---
@@ -411,12 +205,30 @@ async def test_onprem_token_manager_posts_get_tokens() -> None:
 
     assert token == "AAA"
     assert route.called
-    # Verify wire format: JSON body with exactly the three documented keys.
+    # Verify wire format: JSON body with exactly the three documented keys
+    # (ESET help: "Set up the ESET PROTECT On-Prem REST API" - camelCase grantType).
     sent = route.calls.last.request
-    import json
     body = json.loads(sent.content.decode("utf-8"))
-    assert body == {"username": "u@example.com", "password": "s3cret", "grant_type": "password"}
+    assert body == {"username": "u@example.com", "password": "s3cret", "grantType": "password"}
+    assert "grant_type" not in body
     assert sent.headers.get("content-type", "").startswith("application/json")
+
+
+@respx.mock
+async def test_onprem_token_manager_marks_domain_user() -> None:
+    """Active Directory API users add is_domain_user=true to /GetTokens."""
+    creds = Credentials(
+        user="CORP\\api", password="s3cret", region="eu",
+        deployment="onprem", server_url="https://protect.local:9443", domain_user=True,
+    )
+    route = respx.post("https://protect.local:9443/GetTokens").mock(
+        return_value=httpx.Response(200, json={"accessToken": "AAA", "expiresIn": 3600})
+    )
+    async with httpx.AsyncClient() as http:
+        await OnPremTokenManager(creds, http).get_access_token()
+    body = json.loads(route.calls.last.request.content.decode("utf-8"))
+    assert body["is_domain_user"] is True
+    assert body["grantType"] == "password"
 
 
 @respx.mock
@@ -483,32 +295,20 @@ def test_http_client_onprem_verify_false_honoured_and_warns(caplog) -> None:
 def test_tool_def_path_for_picks_onprem_when_override_present() -> None:
     t = ToolDef(
         name="x", description="", input_schema={}, service="device-management",
-        method="POST", path="/v1/devices/{u}:rename", operation_id="Devices_RenameDevice",
-        read_only=False, onprem_path="/v1/devices/{u}:renameDevice",
+        method="GET", path="/v1/devices/{u}", operation_id="Devices_GetDevice",
+        onprem_path="/v1/legacy-devices/{u}",
     )
-    assert t.path_for("cloud") == "/v1/devices/{u}:rename"
-    assert t.path_for("onprem") == "/v1/devices/{u}:renameDevice"
+    assert t.path_for("cloud") == "/v1/devices/{u}"
+    assert t.path_for("onprem") == "/v1/legacy-devices/{u}"
 
 
 def test_tool_def_path_for_falls_back_to_cloud_when_no_override() -> None:
     t = ToolDef(
         name="x", description="", input_schema={}, service="device-management",
-        method="GET", path="/v1/devices", operation_id="Devices_ListDevices", read_only=True,
+        method="GET", path="/v1/devices", operation_id="Devices_ListDevices",
     )
     assert t.path_for("cloud") == "/v1/devices"
     assert t.path_for("onprem") == "/v1/devices"  # no override → same path
-
-
-def test_rename_device_has_onprem_override_loaded_from_json() -> None:
-    """The single override shipped in onprem-path-overrides.json is applied."""
-    tools = load_all_tools()
-    by_name = {t.name: t for t in tools}
-    # Tool name is generated from service prefix + snake_case(operationId).
-    # The OpenAPI op is Devices_RenameDevice under service device-management,
-    # which maps to "device_devices__rename_device".
-    rename = by_name["device_devices__rename_device"]
-    assert rename.path == "/v1/devices/{deviceUuid}:rename"
-    assert rename.onprem_path == "/v1/devices/{deviceUuid}:renameDevice"
 
 
 # --- Cloudflare Access Service Token ---
@@ -585,152 +385,3 @@ async def test_onprem_get_tokens_call_carries_cf_headers() -> None:
         assert sent.headers.get("CF-Access-Client-Secret") == "s3cr3t"
     finally:
         await client.aclose()
-
-
-async def test_middleware_cf_headers_passthrough(monkeypatch) -> None:
-    """X-ESET-CF-Access-* headers stash on the Credentials in the ContextVar."""
-    _set_env(
-        monkeypatch,
-        ESET_AUTH_MODE="basic",
-        ESET_MCP_TRANSPORT="http",
-        ESET_DEPLOYMENT="onprem",
-        ESET_ONPREM_SERVER_URL="https://protect.local:9443",
-    )
-    s = Settings.from_env(env_file=None)
-
-    # Tiny app exposing what the middleware stashed.
-    from starlette.applications import Starlette
-    from starlette.responses import JSONResponse
-    from starlette.routing import Route
-
-    from eset_mcp.middleware import BasicAuthCredentialsMiddleware
-
-    async def _echo(_request):
-        c = request_credentials.get()
-        return JSONResponse({"id": c.cf_access_client_id, "secret": c.cf_access_client_secret})
-
-    app = Starlette(routes=[Route("/echo", _echo)])
-    app.add_middleware(BasicAuthCredentialsMiddleware, settings=s)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        r = await client.get(
-            "/echo",
-            headers={
-                "authorization": _basic_header(),
-                "x-eset-cf-access-client-id": "per-req.access",
-                "x-eset-cf-access-client-secret": "per-req-secret",
-            },
-        )
-    body = r.json()
-    assert body["id"] == "per-req.access"
-    assert body["secret"] == "per-req-secret"
-
-
-async def test_middleware_cf_half_pair_returns_400(monkeypatch) -> None:
-    """Sending only one of the two CF headers is a 400 (almost-certain typo)."""
-    _set_env(
-        monkeypatch,
-        ESET_AUTH_MODE="basic",
-        ESET_MCP_TRANSPORT="http",
-        ESET_DEPLOYMENT="onprem",
-        ESET_ONPREM_SERVER_URL="https://protect.local:9443",
-    )
-    s = Settings.from_env(env_file=None)
-
-    from starlette.applications import Starlette
-    from starlette.responses import JSONResponse
-    from starlette.routing import Route
-
-    from eset_mcp.middleware import BasicAuthCredentialsMiddleware
-
-    async def _echo(_request):
-        return JSONResponse({"ok": True})
-
-    app = Starlette(routes=[Route("/echo", _echo)])
-    app.add_middleware(BasicAuthCredentialsMiddleware, settings=s)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        r = await client.get(
-            "/echo",
-            headers={
-                "authorization": _basic_header(),
-                "x-eset-cf-access-client-id": "only-id",
-                # No secret header.
-            },
-        )
-    assert r.status_code == 400
-
-
-async def test_middleware_cf_env_fallback_when_no_headers(monkeypatch) -> None:
-    """When client sends no CF headers, env defaults are used."""
-    _set_env(
-        monkeypatch,
-        ESET_AUTH_MODE="basic",
-        ESET_MCP_TRANSPORT="http",
-        ESET_DEPLOYMENT="onprem",
-        ESET_ONPREM_SERVER_URL="https://protect.local:9443",
-        ESET_ONPREM_CF_ACCESS_CLIENT_ID="env-id.access",
-        ESET_ONPREM_CF_ACCESS_CLIENT_SECRET="env-secret",
-    )
-    s = Settings.from_env(env_file=None)
-
-    from starlette.applications import Starlette
-    from starlette.responses import JSONResponse
-    from starlette.routing import Route
-
-    from eset_mcp.middleware import BasicAuthCredentialsMiddleware
-
-    async def _echo(_request):
-        c = request_credentials.get()
-        return JSONResponse({"id": c.cf_access_client_id, "secret": c.cf_access_client_secret})
-
-    app = Starlette(routes=[Route("/echo", _echo)])
-    app.add_middleware(BasicAuthCredentialsMiddleware, settings=s)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        r = await client.get("/echo", headers={"authorization": _basic_header()})
-    body = r.json()
-    assert body["id"] == "env-id.access"
-    assert body["secret"] == "env-secret"
-
-
-async def test_middleware_cloud_request_never_propagates_cf_headers(monkeypatch) -> None:
-    """Even if env defaults set CF tokens, cloud requests must not carry them.
-
-    Cloud creds always have empty CF fields because ESET Connect doesn't sit
-    behind anyone's CF Access - propagating the headers would leak the
-    token to the public ESET API for no benefit.
-    """
-    _set_env(
-        monkeypatch,
-        ESET_AUTH_MODE="basic",
-        ESET_MCP_TRANSPORT="http",
-        ESET_DEPLOYMENT="cloud",
-        ESET_ONPREM_CF_ACCESS_CLIENT_ID="env-id.access",
-        ESET_ONPREM_CF_ACCESS_CLIENT_SECRET="env-secret",
-    )
-    s = Settings.from_env(env_file=None)
-
-    from starlette.applications import Starlette
-    from starlette.responses import JSONResponse
-    from starlette.routing import Route
-
-    from eset_mcp.middleware import BasicAuthCredentialsMiddleware
-
-    async def _echo(_request):
-        c = request_credentials.get()
-        return JSONResponse({
-            "deployment": c.deployment,
-            "id": c.cf_access_client_id,
-            "secret": c.cf_access_client_secret,
-        })
-
-    app = Starlette(routes=[Route("/echo", _echo)])
-    app.add_middleware(BasicAuthCredentialsMiddleware, settings=s)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        r = await client.get("/echo", headers={"authorization": _basic_header()})
-    body = r.json()
-    assert body["deployment"] == "cloud"
-    assert body["id"] == ""
-    assert body["secret"] == ""

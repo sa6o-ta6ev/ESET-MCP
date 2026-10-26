@@ -1,21 +1,36 @@
 """MCP server - registers tools, resources and prompts.
 
-Targets MCP spec 2025-11-25 (Streamable HTTP). Uses the official `mcp` Python SDK.
+Uses the low-level ``Server`` from the official `mcp` Python SDK (2.x).
+Every tool is read-only: generated tools wrap ESET GET endpoints, and the
+composite tools only fan out GET requests.
 """
 from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
+from urllib.parse import quote
 
-from mcp.server import Server
+from jsonschema.validators import validator_for
+from mcp.server import Server, ServerRequestContext
 from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    GetPromptRequestParams,
     GetPromptResult,
+    ListPromptsResult,
+    ListResourcesResult,
+    ListToolsResult,
+    PaginatedRequestParams,
     Prompt,
     PromptArgument,
     PromptMessage,
+    ReadResourceRequestParams,
+    ReadResourceResult,
     Resource,
     TextContent,
+    TextResourceContents,
     Tool,
     ToolAnnotations,
 )
@@ -30,16 +45,15 @@ from .composite_tools import (
     latest_detections,
 )
 from .config import Settings
-from .credentials import CredentialResolverError
-from .errors import EsetApiError, ModeForbiddenError
+from .errors import EsetApiError
 from .http_client import EsetHttpClient
-from .modes import check_mode_allows
 from .observability import (
     inc_capped,
     inc_tool_call,
     log_event,
     observe_response_bytes,
     observe_tool_duration,
+    record_usage,
 )
 from .response_shaping import apply_fields_projection, cap_response_size
 from .tools_loader import ToolDef, load_all_tools
@@ -50,7 +64,13 @@ from .tools_loader import ToolDef, load_all_tools
 
 _LOG = logging.getLogger("eset_mcp.server")
 
-# All composite tools are read-only (they only fan out GET requests).
+_READ_ONLY = ToolAnnotations(
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=True,  # external API (ESET)
+)
+
 _COMPOSITE_TOOLS: list[Tool] = [
     Tool(
         name="eset_search",
@@ -60,7 +80,7 @@ _COMPOSITE_TOOLS: list[Tool] = [
             "of list_* + manual filtering when you have a name fragment (e.g. 'jeff', 'laptop-23', "
             "'finance')."
         ),
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "query": {
@@ -87,22 +107,17 @@ _COMPOSITE_TOOLS: list[Tool] = [
             "required": ["query"],
             "additionalProperties": False,
         },
-        annotations=ToolAnnotations(
-            title="ESET cross-resource substring search",
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=True,
-        ),
+        annotations=_READ_ONLY.model_copy(update={"title": "ESET cross-resource substring search"}),
     ),
     Tool(
         name="device_full_profile",
         description=(
-            "One call → device record + recent detections + vulnerabilities + recent scans. "
-            "Use when answering 'what do you know about this machine'. Each sub-section "
-            "degrades gracefully if the tenant lacks a module."
+            "One call → device record + its recent detections (last 30 days) + detection "
+            "groups + vulnerabilities + recent scans. Use when answering 'what do you know "
+            "about this machine'. Each sub-section degrades gracefully if the tenant lacks "
+            "a module."
         ),
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "deviceUuid": {"type": "string", "description": "UUID of the device."},
@@ -110,13 +125,7 @@ _COMPOSITE_TOOLS: list[Tool] = [
             "required": ["deviceUuid"],
             "additionalProperties": False,
         },
-        annotations=ToolAnnotations(
-            title="ESET device full profile (composite)",
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=True,
-        ),
+        annotations=_READ_ONLY.model_copy(update={"title": "ESET device full profile (composite)"}),
     ),
     Tool(
         name="incident_full_context",
@@ -125,7 +134,7 @@ _COMPOSITE_TOOLS: list[Tool] = [
             "Detections and devices are capped at 10 each to stay within rate limits; "
             "the response carries a 'truncated' flag if more exist."
         ),
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "incidentUuid": {"type": "string", "description": "UUID of the incident."},
@@ -133,24 +142,18 @@ _COMPOSITE_TOOLS: list[Tool] = [
             "required": ["incidentUuid"],
             "additionalProperties": False,
         },
-        annotations=ToolAnnotations(
-            title="ESET incident full context (composite)",
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=True,
-        ),
+        annotations=_READ_ONLY.model_copy(update={"title": "ESET incident full context (composite)"}),
     ),
     Tool(
         name="latest_detections",
         description=(
             "Newest detections in a time window, sorted by occurTime descending. "
-            "Use this - NOT raw incident_detections__list_detections_* - when answering "
+            "Use this - NOT the raw list_detections tools - when answering "
             "'what's the latest detection / what happened recently'. The raw list endpoints "
             "do NOT sort by date, so a first-page sort silently returns stale rows. "
             "This composite does v2→v1 fallback, paginates the time window, and sorts locally."
         ),
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "hours": {
@@ -175,187 +178,176 @@ _COMPOSITE_TOOLS: list[Tool] = [
             },
             "additionalProperties": False,
         },
-        annotations=ToolAnnotations(
-            title="ESET latest detections (composite)",
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=True,
-        ),
+        annotations=_READ_ONLY.model_copy(update={"title": "ESET latest detections (composite)"}),
+    ),
+]
+
+_RESOURCES: list[Resource] = [
+    Resource(
+        uri="eset://config/region",
+        name="ESET region",
+        description="API region (eu/de/us/ca/jpn). Only meaningful for cloud deployments.",
+        mime_type="text/plain",
+    ),
+    Resource(
+        uri="eset://config/deployment",
+        name="ESET deployment kind",
+        description="'cloud' (ESET Connect API) or 'onprem' (customer-hosted ESET PROTECT console).",
+        mime_type="text/plain",
+    ),
+    Resource(
+        uri="eset://config/tools-catalog",
+        name="Tools catalog",
+        description="List of all tools with their mapping to ESET endpoints.",
+        mime_type="application/json",
+    ),
+    Resource(
+        uri="eset://docs/rate-limits",
+        name="ESET API rate limits",
+        description="10 req/s per credential/IP. Bursts subject to the Fair Use Policy.",
+        mime_type="text/markdown",
+    ),
+]
+
+_PROMPTS: list[Prompt] = [
+    Prompt(
+        name="audit_inactive_devices",
+        description="List devices that have not checked in for X days - offboarding candidates.",
+        arguments=[
+            PromptArgument(name="days", description="Inactivity threshold in days (default 30).", required=False),
+        ],
+    ),
+    Prompt(
+        name="vulnerability_report",
+        description="Build a CVE report: which devices have unpatched vulnerabilities, sorted by severity.",
+        arguments=[],
+    ),
+    Prompt(
+        name="incident_triage",
+        description="Show open incidents + related detections. Suggest priorities.",
+        arguments=[],
     ),
 ]
 
 
+class _ToolError(Exception):
+    """A tool call failed in a way the agent should see as ``is_error``."""
+
+    def __init__(self, message: str, status: str = "error"):
+        super().__init__(message)
+        self.status = status
+
+
 def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
-    """Build an mcp.server.Server instance with every capability wired up.
+    """Build an mcp Server instance with every capability wired up.
 
     `resolver` is anything with a no-arg ``resolve() -> Credentials`` method
-    (EnvCredentialResolver in single-tenant mode, BasicAuthCredentialResolver
-    in multi-tenant mode - see eset_mcp.credentials).
-    `pool` is the shared ClientPool keyed by (user, region).
+    (see eset_mcp.credentials). `pool` is the shared ClientPool.
     """
-    server = Server(name="eset-mcp", version=__version__)
     tools = load_all_tools()
     tools_by_name = {t.name: t for t in tools}
+    mcp_tools = [*_COMPOSITE_TOOLS, *(_tool_to_mcp(t) for t in tools)]
+    schemas = {t.name: t.input_schema for t in mcp_tools}
+    # The low-level Server does not validate tool arguments, so we do. Unknown
+    # OpenAPI keywords (nullable, readOnly, ...) are ignored by jsonschema.
+    validators = {name: validator_for(schema)(schema) for name, schema in schemas.items()}
 
     async def _http() -> EsetHttpClient:
         """Resolve current request's credentials → fetch a pooled client."""
-        creds = resolver.resolve()
-        return await pool.get(creds)
+        return await pool.get(resolver.resolve())
 
     # --- TOOLS ---
-    @server.list_tools()
-    async def _list_tools() -> list[Tool]:
-        # In RO mode we hide RW tools entirely - the agent never sees them in
-        # the catalog. Earlier design kept them visible-but-blocked, but that
-        # wasted the agent's context and tempted it to call something that
-        # could never succeed. Composite tools are all RO and always shown.
-        if settings.mode == "RO":
-            return [
-                *_COMPOSITE_TOOLS,
-                *(_tool_to_mcp(t) for t in tools if t.read_only),
-            ]
-        return [*_COMPOSITE_TOOLS, *(_tool_to_mcp(t) for t in tools)]
+    async def on_list_tools(
+        _ctx: ServerRequestContext, _params: PaginatedRequestParams | None
+    ) -> ListToolsResult:
+        return ListToolsResult(tools=mcp_tools)
 
-    @server.call_tool()
-    async def _call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
-        import time as _time
-
-        # All mutable telemetry state lives in this dict so the finally
-        # block can read it without resorting to `locals().get(...)`.
-        tel: dict[str, Any] = {
-            "t0": _time.monotonic(),
-            "deployment": "unknown",
-            "user": "",
-            "status": "error",
-            "bytes_out": 0,
-        }
+    async def on_call_tool(_ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+        name = params.name
+        t0 = time.monotonic()
+        deployment = settings.deployment
+        status = "error"
+        bytes_out = 0
         try:
-            return await _dispatch(name, arguments, tel)
+            text = await _dispatch(name, dict(params.arguments or {}))
+            status = "ok"
+            bytes_out = len(text.encode("utf-8"))
+            return CallToolResult(content=[TextContent(type="text", text=text)])
+        except _ToolError as e:
+            status = e.status
+            return CallToolResult(content=[TextContent(type="text", text=str(e))], is_error=True)
+        except Exception as e:
+            # Unexpected bug or transport failure (timeout, DNS, ...). Report
+            # it as a tool error the agent can read instead of a bare JSON-RPC
+            # "Internal server error"; the traceback goes to the log.
+            status = "exception"
+            _LOG.exception("tool %s failed", name)
+            text = f"Internal error while running {name}: {type(e).__name__}: {e}"
+            return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
         finally:
             # Telemetry must NEVER kill a tool call. Wrap defensively so
             # that a misbehaving metrics registry or formatter cannot
-            # turn a successful tool call into a 500 to the agent.
+            # turn a successful tool call into an error for the agent.
             try:
-                _emit_tool_call_telemetry(name, settings.mode, tel)
+                _emit_tool_call_telemetry(settings, name, deployment, status, t0, bytes_out)
             except Exception:  # observability MUST be best-effort
                 _LOG.exception("telemetry emission failed for tool=%s", name)
 
-    async def _dispatch(name: str, arguments: dict[str, Any], tel: dict[str, Any]) -> list[TextContent]:
-        try:
-            http = await _http()
-        except CredentialResolverError as e:
-            tel["status"] = "auth_error"
-            return [TextContent(type="text", text=f"Auth error: {e}")]
-        tel["deployment"] = http.credentials.deployment
-        tel["user"] = getattr(http.credentials, "user", "")
+    async def _dispatch(name: str, arguments: dict[str, Any]) -> str:
+        if name not in schemas:
+            raise _ToolError(f"Unknown tool: {name}", status="unknown_tool")
+        errors = sorted(validators[name].iter_errors(arguments), key=lambda e: list(e.path))
+        if errors:
+            details = "; ".join(
+                f"{'/'.join(map(str, e.path)) or '(arguments)'}: {e.message}" for e in errors[:5]
+            )
+            raise _ToolError(f"Invalid arguments for {name}: {details}", status="invalid_arguments")
+        http = await _http()
 
-        # `fields` is a *synthetic* parameter we add to every read-only tool
+        # `fields` is a *synthetic* parameter we add to every generated tool
         # (see tools_loader._build_input_schema). It is a server-side
         # projection, never forwarded to ESET - so we pop it before dispatch.
-        arguments = dict(arguments)
         fields = arguments.pop("fields", None)
         max_bytes = settings.response_bytes_max
 
-        # Composite tools dispatch first (they are not OpenAPI-derived).
-        composite = await _dispatch_composite(http, name, arguments, fields, max_bytes)
-        if composite is not None:
-            tel["status"] = "200"
-            if composite and composite[0].text:
-                tel["bytes_out"] = len(composite[0].text.encode("utf-8"))
-            return composite
-
-        tool = tools_by_name.get(name)
-        if tool is None:
-            tel["status"] = "unknown_tool"
-            raise ValueError(f"Unknown tool: {name}")
-        check_mode_allows(tool.required_mode, settings.mode, name)
         try:
-            result = await _execute_tool(http, tool, arguments)
-        except ModeForbiddenError as e:
-            tel["status"] = "mode_forbidden"
-            return [TextContent(type="text", text=str(e))]
+            composite = await _dispatch_composite(http, name, arguments)
+            if composite is not None:
+                if isinstance(composite, dict) and "error" in composite:
+                    # Composites report a failed primary fetch as {"error": ...}.
+                    raise _ToolError(_to_text(composite), status="eset_error")
+                return _to_text(_shape(composite, fields, max_bytes))
+            result = await _execute_tool(http, tools_by_name[name], arguments)
         except EsetApiError as e:
-            tel["status"] = str(getattr(e, "status", "error"))
-            return [TextContent(type="text", text=f"ESET API error: {e}")]
+            raise _ToolError(f"ESET API error: {e}", status=str(e.status)) from e
+
         shaped = _shape(result, fields, max_bytes)
         if isinstance(shaped, dict) and "_capped" in shaped:
             inc_capped(tool=name)
-        text = _to_text(shaped)
-        tel["bytes_out"] = len(text.encode("utf-8"))
-        tel["status"] = "200"
-        return [TextContent(type="text", text=text)]
+        return _to_text(shaped)
 
     # --- RESOURCES ---
-    @server.list_resources()
-    async def _list_resources() -> list[Resource]:
-        return [
-            Resource(
-                uri="eset://config/mode",
-                name="ESET MCP mode (RO/RW)",
-                description="Current server mode - independent of the API account's permissions.",
-                mimeType="text/plain",
-            ),
-            Resource(
-                uri="eset://config/region",
-                name="ESET region",
-                description="API region (eu/de/us/ca/jpn). Only meaningful for cloud deployments.",
-                mimeType="text/plain",
-            ),
-            Resource(
-                uri="eset://config/deployment",
-                name="ESET deployment kind",
-                description=(
-                    "Per-request: 'cloud' (ESET Connect API) or 'onprem' "
-                    "(customer-hosted ESET PROTECT console). In basic-auth "
-                    "mode an X-ESET-Server-URL header switches the request "
-                    "to on-prem."
-                ),
-                mimeType="text/plain",
-            ),
-            Resource(
-                uri="eset://config/tools-catalog",
-                name="Tools catalog",
-                description="List of all tools with RO/RW split and mapping to ESET endpoints.",
-                mimeType="application/json",
-            ),
-            Resource(
-                uri="eset://docs/rate-limits",
-                name="ESET API rate limits",
-                description="10 req/s per credential/IP. Bursts subject to the Fair Use Policy.",
-                mimeType="text/markdown",
-            ),
-        ]
+    async def on_list_resources(
+        _ctx: ServerRequestContext, _params: PaginatedRequestParams | None
+    ) -> ListResourcesResult:
+        return ListResourcesResult(resources=_RESOURCES)
 
-    @server.read_resource()
-    async def _read_resource(uri) -> str:
-        # MCP SDK passes a pydantic AnyUrl; coerce to str so string comparisons work.
-        uri = str(uri)
-        if uri == "eset://config/mode":
-            return settings.mode
+    async def on_read_resource(
+        _ctx: ServerRequestContext, params: ReadResourceRequestParams
+    ) -> ReadResourceResult:
+        uri = str(params.uri)
+        mime_type = "text/plain"
         if uri == "eset://config/region":
-            # In basic-auth mode this reflects the *current request's* region,
-            # not just the .env default - agents can use this to confirm
-            # which tenant they're hitting.
-            try:
-                return resolver.resolve().region
-            except CredentialResolverError:
-                return settings.region
-        if uri == "eset://config/deployment":
+            text = resolver.resolve().region
+        elif uri == "eset://config/deployment":
             # For on-prem credentials we surface the server URL too - it's
             # the only useful "where am I" hint the agent has.
-            try:
-                creds = resolver.resolve()
-            except CredentialResolverError:
-                return settings.deployment
-            if creds.deployment == "onprem":
-                return f"onprem ({creds.server_url})"
-            return "cloud"
-        if uri == "eset://config/tools-catalog":
+            creds = resolver.resolve()
+            text = f"onprem ({creds.server_url})" if creds.deployment == "onprem" else "cloud"
+        elif uri == "eset://config/tools-catalog":
             catalog = [
                 {
                     "name": t.name,
-                    "mode": t.required_mode,
                     "method": t.method,
                     "path": t.path,
                     "service": t.service,
@@ -363,64 +355,56 @@ def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
                 }
                 for t in tools
             ]
-            return json.dumps(catalog, indent=2, ensure_ascii=False)
-        if uri == "eset://docs/rate-limits":
-            return (
+            text = json.dumps(catalog, indent=2, ensure_ascii=False)
+            mime_type = "application/json"
+        elif uri == "eset://docs/rate-limits":
+            text = (
                 "# ESET Connect - rate limits\n\n"
                 "- **10 req/s** per credential / account / originating IP.\n"
                 "- 429 Too Many Requests on exceedance - the MCP server retries with backoff.\n"
                 "- Bursts >1000 requests trip the Fair Use Policy: some get 202, "
                 "some 50x (must be retried later).\n"
             )
-        raise ValueError(f"Unknown resource URI: {uri}")
+            mime_type = "text/markdown"
+        else:
+            raise ValueError(f"Unknown resource URI: {uri}")
+        return ReadResourceResult(contents=[TextResourceContents(uri=uri, mime_type=mime_type, text=text)])
 
     # --- PROMPTS ---
-    @server.list_prompts()
-    async def _list_prompts() -> list[Prompt]:
-        return [
-            Prompt(
-                name="audit_inactive_devices",
-                description="List devices that have not checked in for X days - offboarding candidates.",
-                arguments=[
-                    PromptArgument(name="days", description="Inactivity threshold in days (default 30).", required=False),
-                ],
-            ),
-            Prompt(
-                name="vulnerability_report",
-                description="Build a CVE report: which devices have unpatched vulnerabilities, sorted by severity.",
-                arguments=[],
-            ),
-            Prompt(
-                name="incident_triage",
-                description="Show open incidents + related detections. Suggest priorities.",
-                arguments=[],
-            ),
-        ]
+    async def on_list_prompts(
+        _ctx: ServerRequestContext, _params: PaginatedRequestParams | None
+    ) -> ListPromptsResult:
+        return ListPromptsResult(prompts=_PROMPTS)
 
-    @server.get_prompt()
-    async def _get_prompt(name: str, arguments: dict[str, str] | None) -> GetPromptResult:
-        args = arguments or {}
+    # Tool names are derived from ESET's operationIds, which ESET renames
+    # between spec versions - so prompts look tools up by path, not by name.
+    tool_for_path = {t.path: t.name for t in tools}
+
+    async def on_get_prompt(_ctx: ServerRequestContext, params: GetPromptRequestParams) -> GetPromptResult:
+        name = params.name
+        args = params.arguments or {}
         if name == "audit_inactive_devices":
             days = args.get("days", "30")
             text = (
                 f"Use the ESET MCP tools to list devices inactive for at least {days} days.\n"
                 f"Steps:\n"
-                f"1. `device_devices__list_devices` - fetch all.\n"
-                f"2. Filter by `lastConnected` < now - {days}d.\n"
+                f"1. `{tool_for_path['/v1/devices']}` - fetch all (follow nextPageToken).\n"
+                f"2. Filter by `lastSyncTime` < now - {days}d.\n"
                 f"3. Present as a table: name, OS, last seen, group.\n"
             )
         elif name == "vulnerability_report":
             text = (
                 "Build a vulnerability report:\n"
-                "1. `vuln_vulnerabilities__list_vulnerable_devices` - list of devices.\n"
-                "2. For the top-N (e.g. 10) by severity → `vuln_vulnerabilities__list_device_vulnerabilities`.\n"
+                f"1. `{tool_for_path['/v1/vulnerable-devices']}` - list of devices.\n"
+                "2. For the top-N (e.g. 10) by severity → "
+                f"`{tool_for_path['/v1/device-vulnerabilities']}` with deviceUuid.\n"
                 "3. Group by CVE, sort by severity, show top 10.\n"
             )
         elif name == "incident_triage":
             text = (
                 "Open incident review:\n"
-                "1. `incident_incidents__list_incidents` with `status=open`.\n"
-                "2. For each → `incident_incidents__get_incident` + `incident_detections__list_detections_v2`.\n"
+                f"1. `{tool_for_path['/v2/incidents']}` - list incidents, keep the open ones.\n"
+                "2. For each → `incident_full_context` (incident + comments + detections + devices).\n"
                 "3. Sort by severity and first-detection time. Propose priorities.\n"
             )
         else:
@@ -430,29 +414,39 @@ def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
             messages=[PromptMessage(role="user", content=TextContent(type="text", text=text))],
         )
 
-    return server
+    return Server(
+        "eset-mcp",
+        version=__version__,
+        get_tool_input_schema=schemas.get,
+        on_list_tools=on_list_tools,
+        on_call_tool=on_call_tool,
+        on_list_resources=on_list_resources,
+        on_read_resource=on_read_resource,
+        on_list_prompts=on_list_prompts,
+        on_get_prompt=on_get_prompt,
+    )
 
 
 def _tool_to_mcp(t: ToolDef) -> Tool:
-    """Convert ToolDef -> mcp.types.Tool with proper annotations.
-
-    RO mode filters RW tools out of `list_tools` upstream, so by the time
-    this runs `t` is already mode-appropriate. The call_tool gate stays as
-    defence-in-depth for hard-coded RW tool names.
-    """
-    annotations = ToolAnnotations(
-        title=f"{t.method} {t.path}",
-        readOnlyHint=t.read_only,
-        destructiveHint=t.destructive,
-        idempotentHint=t.method.upper() in {"GET", "PUT", "DELETE"},
-        openWorldHint=True,  # external API (ESET cloud)
-    )
+    """Convert ToolDef -> mcp.types.Tool with read-only annotations."""
     return Tool(
         name=t.name,
         description=t.description,
-        inputSchema=t.input_schema,
-        annotations=annotations,
+        input_schema=t.input_schema,
+        annotations=_READ_ONLY.model_copy(update={"title": f"{t.method} {t.path}"}),
     )
+
+
+def _path_segment(value: Any) -> str:
+    """Encode one path parameter so it stays a single URL path segment.
+
+    Without this, a value such as ``../v1/users`` (e.g. injected through
+    data the agent read from ESET) would walk to a different endpoint.
+    """
+    raw = str(value)
+    if raw in ("", ".", ".."):
+        raise _ToolError(f"Invalid path parameter value: {raw!r}", status="bad_request")
+    return quote(raw, safe="")
 
 
 async def _execute_tool(
@@ -470,8 +464,8 @@ async def _execute_tool(
     path = tool.path_for(http.credentials.deployment)
     for pname in tool.path_params:
         if pname not in args:
-            raise ValueError(f"Missing required path parameter: {pname}")
-        path = path.replace("{" + pname + "}", str(args.pop(pname)))
+            raise _ToolError(f"Missing required path parameter: {pname}", status="bad_request")
+        path = path.replace("{" + pname + "}", _path_segment(args.pop(pname)))
 
     # Query params: keep only the declared ones, leave the rest in args (e.g. body).
     query = {pname: args.pop(pname) for pname in tool.query_params if pname in args}
@@ -492,20 +486,11 @@ def _to_text(result: Any) -> str:
         return str(result)
 
 
-def _emit_tool_call_telemetry(name: str, mode: str, tel: dict[str, Any]) -> None:
-    """Emit the metric + log pair for a finished tool call.
-
-    `tel` is the per-call mutable state that `_call_tool` keeps (deployment,
-    user, status, bytes_out, plus `t0` from time.monotonic()). Passing the
-    dict avoids a 7-argument signature and keeps the call-site readable.
-    """
-    import time as _time
-    deployment = tel["deployment"]
-    duration_s = _time.monotonic() - tel["t0"]
-    status = tel["status"]
-    bytes_out = tel["bytes_out"]
-    user = tel["user"]
-
+def _emit_tool_call_telemetry(
+    settings: Settings, name: str, deployment: str, status: str, t0: float, bytes_out: int
+) -> None:
+    """Emit the metric, log and usage-file records for a finished tool call."""
+    duration_s = time.monotonic() - t0
     inc_tool_call(tool=name, deployment=deployment, status=status)
     observe_tool_duration(tool=name, deployment=deployment, seconds=duration_s)
     if bytes_out > 0:
@@ -514,12 +499,18 @@ def _emit_tool_call_telemetry(name: str, mode: str, tel: dict[str, Any]) -> None
         _LOG, "tool_call",
         tool=name,
         deployment=deployment,
-        user=user,
-        mode=mode,
         status=status,
         duration_ms=int(duration_s * 1000),
         response_bytes=bytes_out,
     )
+    if settings.usage_log_path:
+        record_usage(
+            settings.usage_log_path,
+            tool=name,
+            ok=status == "ok",
+            status=status,
+            duration_ms=int(duration_s * 1000),
+        )
 
 
 def _shape(result: Any, fields: list[str] | None, max_bytes: int) -> Any:
@@ -539,37 +530,28 @@ async def _dispatch_composite(
     http: EsetHttpClient,
     name: str,
     arguments: dict[str, Any],
-    fields: list[str] | None,
-    max_bytes: int,
-) -> list[TextContent] | None:
-    """If `name` is one of the composite tools, run it and return MCP content.
+) -> Any:
+    """If `name` is one of the composite tools, run it and return its result.
 
     Returns None when `name` is not a composite - caller falls through to the
-    OpenAPI-derived tool registry. Composite tools are always RO; we don't
-    invoke the mode gate. Composites are expected to be moderately sized but
-    we still apply the cap as a safety net.
+    OpenAPI-derived tool registry.
     """
-    try:
-        if name == "eset_search":
-            result = await eset_search(
-                http,
-                query=arguments["query"],
-                kinds=arguments.get("kinds"),
-                limit_per_kind=int(arguments.get("limit_per_kind", 20)),
-            )
-        elif name == "device_full_profile":
-            result = await device_full_profile(http, device_uuid=arguments["deviceUuid"])
-        elif name == "incident_full_context":
-            result = await incident_full_context(http, incident_uuid=arguments["incidentUuid"])
-        elif name == "latest_detections":
-            result = await latest_detections(
-                http,
-                hours=int(arguments.get("hours", 24)),
-                limit=int(arguments.get("limit", 10)),
-                severity_min=arguments.get("severity_min"),
-            )
-        else:
-            return None
-    except EsetApiError as e:
-        return [TextContent(type="text", text=f"ESET API error: {e}")]
-    return [TextContent(type="text", text=_to_text(_shape(result, fields, max_bytes)))]
+    if name == "eset_search":
+        return await eset_search(
+            http,
+            query=arguments["query"],
+            kinds=arguments.get("kinds"),
+            limit_per_kind=int(arguments.get("limit_per_kind", 20)),
+        )
+    if name == "device_full_profile":
+        return await device_full_profile(http, device_uuid=arguments["deviceUuid"])
+    if name == "incident_full_context":
+        return await incident_full_context(http, incident_uuid=arguments["incidentUuid"])
+    if name == "latest_detections":
+        return await latest_detections(
+            http,
+            hours=int(arguments.get("hours", 24)),
+            limit=int(arguments.get("limit", 10)),
+            severity_min=arguments.get("severity_min"),
+        )
+    return None

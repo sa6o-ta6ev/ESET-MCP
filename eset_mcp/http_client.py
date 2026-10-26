@@ -4,7 +4,7 @@ Rules from the ESET Connect docs:
 - 202 Accepted = pending; poll with `response-id` header, up to 10 minutes.
 - 429 Too Many Requests = rate limit (10 req/s); exponential backoff, max 3 tries.
 - 401 = token expired; one forced refresh + retry.
-- 5xx = transient; single retry.
+- 500/502/503/504 = transient; single retry for GET (safe to repeat).
 
 This class is *credentials-bound*: a single client owns one OAuth session for
 one ESET account (cloud) or one PROTECT console (on-prem). In multi-tenant
@@ -46,6 +46,10 @@ _PENDING_POLL_BUDGET_S = 600.0  # 10 minutes, per the docs.
 # Rate-limit retry.
 _RATE_LIMIT_MAX_TRIES = 3
 _RATE_LIMIT_BASE_BACKOFF_S = 1.0
+
+# Transient upstream failures - one retry, GET only.
+_TRANSIENT_STATUSES = {500, 502, 503, 504}
+_TRANSIENT_RETRY_DELAY_S = 1.0
 
 
 class EsetHttpClient:
@@ -172,6 +176,18 @@ class EsetHttpClient:
                 resp = await self._http.request(method, url, params=query, json=json, headers=headers)
                 if resp.status_code != 429:
                     break
+
+        # 5xx - transient upstream failure, retry once (GET is idempotent).
+        if resp.status_code in _TRANSIENT_STATUSES and method.upper() == "GET":
+            inc_http_retry(deployment=self._creds.deployment, status=str(resp.status_code))
+            log_event(
+                _LOG, "http_request_retry", level=logging.WARNING,
+                deployment=self._creds.deployment,
+                method=method, service=service, status=resp.status_code,
+                reason="upstream_error",
+            )
+            await asyncio.sleep(_TRANSIENT_RETRY_DELAY_S)
+            resp = await self._http.request(method, url, params=query, json=json, headers=headers)
 
         # 202 - pending, long-poll with response-id.
         if resp.status_code == 202:

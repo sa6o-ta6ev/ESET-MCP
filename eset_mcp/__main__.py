@@ -6,7 +6,7 @@ import logging
 
 from .client_pool import ClientPool
 from .config import Settings
-from .credentials import BasicAuthCredentialResolver, EnvCredentialResolver
+from .credentials import EnvCredentialResolver
 from .observability import configure_logging, log_event
 from .server import build_server
 
@@ -17,18 +17,17 @@ def main() -> None:
     log = logging.getLogger("eset_mcp")
     log_event(
         log, "server_starting",
-        mode=settings.mode,
         region=settings.region,
         transport=settings.transport,
-        auth_mode=settings.auth_mode,
         deployment=settings.deployment,
         metrics_enabled=settings.metrics_enabled,
+        usage_log=settings.usage_log_path or "(disabled)",
         log_format=settings.log_format,
     )
     if settings.deployment == "onprem":
         log_event(
             log, "onprem_default",
-            server_url=settings.onprem_server_url or "(none - must be supplied per request)",
+            server_url=settings.onprem_server_url,
             verify_ssl=settings.onprem_verify_ssl,
         )
 
@@ -37,10 +36,7 @@ def main() -> None:
 
 async def _run(settings: Settings) -> None:
     pool = ClientPool(settings)
-    if settings.auth_mode == "env":
-        resolver = EnvCredentialResolver(settings)
-    else:
-        resolver = BasicAuthCredentialResolver(settings)
+    resolver = EnvCredentialResolver(settings)
 
     server = build_server(settings, pool, resolver)
     try:
@@ -57,12 +53,19 @@ async def _run(settings: Settings) -> None:
 
 
 async def _serve_http(settings: Settings, server) -> None:
-    """Streamable HTTP transport per MCP spec 2025-11-25.
+    """Streamable HTTP transport.
+
+    The endpoint has NO authentication of its own - it serves the tenant in
+    ``.env`` to anyone who can reach it. Keep ``ESET_MCP_HTTP_HOST`` on
+    127.0.0.1, or put an authenticating proxy in front.
+
+    Stateless: every request gets a fresh transport and no ``Mcp-Session-Id``
+    is issued, so there is no server-side session to hijack or to leak
+    between clients.
 
     NOTE: StreamableHTTPSessionManager owns an anyio task group that MUST be
     entered via `async with manager.run()` BEFORE any request hits
-    `manager.handle_request`. Skipping that yields 500s with
-    "Task group is not initialized. Make sure to use run().".
+    `manager.handle_request`.
     """
     import contextlib
 
@@ -71,7 +74,7 @@ async def _serve_http(settings: Settings, server) -> None:
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
-    manager = StreamableHTTPSessionManager(app=server, stateless=False)
+    manager = StreamableHTTPSessionManager(app=server, stateless=True, json_response=True)
 
     @contextlib.asynccontextmanager
     async def _lifespan(_app):
@@ -79,10 +82,8 @@ async def _serve_http(settings: Settings, server) -> None:
             yield
 
     routes = [Mount("/mcp", app=manager.handle_request)]
-    # Optional /metrics endpoint - mounted BEFORE the basic-auth middleware
-    # is added so that Prometheus scrapers don't need to send Basic auth
-    # to pull metrics. The endpoint carries no secrets and is intended to
-    # be protected at the network layer (private subnet / VPN / Caddy ACL).
+    # Optional /metrics endpoint. It carries no secrets and is intended to
+    # be protected at the network layer (private subnet / VPN / proxy ACL).
     if settings.metrics_enabled:
         from .observability.metrics import metrics_asgi_app, metrics_available
         routes.append(Mount(settings.metrics_path, app=metrics_asgi_app()))
@@ -95,17 +96,6 @@ async def _serve_http(settings: Settings, server) -> None:
             )
 
     app = Starlette(routes=routes, lifespan=_lifespan)
-
-    # Basic-auth middleware sits in front of everything in `basic` mode -
-    # EXCEPT the /metrics route, which was added above. We skip the
-    # middleware for that path so scrapers don't get 401'd.
-    if settings.auth_mode == "basic":
-        from .middleware import BasicAuthCredentialsMiddleware
-        app.add_middleware(
-            BasicAuthCredentialsMiddleware,
-            settings=settings,
-            skip_paths=(settings.metrics_path,) if settings.metrics_enabled else (),
-        )
 
     config = uvicorn.Config(
         app, host=settings.http_host, port=settings.http_port, log_level=settings.log_level.lower()

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eset-mcp"
-version = "1.0.3"
-description = "MCP server for the ESET ecosystem (Connect cloud + PROTECT On-Prem, RO/RW, multi-tenant, Cloudflare Access, Prometheus metrics)"
+version = "2.0.0"
+description = "Read-only MCP server for the ESET ecosystem (Connect cloud + PROTECT On-Prem, usage stats, Prometheus metrics)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -27,12 +27,17 @@ classifiers = [
 ]
 
 dependencies = [
-    # MCP SDK (Python) — spec 2025-11-25 compatible.
-    "mcp>=1.2.0",
+    # MCP SDK (Python). 2.x replaced the 1.x decorator API this server used
+    # to rely on; the upper bound stops the next major from breaking startup
+    # the same way. Exact versions are pinned in uv.lock.
+    "mcp>=2.3,<3",
     # HTTP client — async, with retries / streaming / connection pooling.
-    "httpx>=0.27",
+    "httpx>=0.27,<1",
     # Pydantic for input validation and auto-generating inputSchema for tools.
     "pydantic>=2.7",
+    # Tool-argument validation against each tool's inputSchema (the low-level
+    # MCP Server does not validate arguments itself).
+    "jsonschema>=4.20,<5",
     # .env loader (better than a hand-rolled parser — e.g. correct quoting).
     "python-dotenv>=1.0",
 ]
@@ -54,6 +59,7 @@ metrics = [
 [project.scripts]
 # After `pip install .` we get `eset-mcp` on PATH.
 eset-mcp = "eset_mcp.__main__:main"
+eset-mcp-stats = "eset_mcp.observability.usage:main"
 
 [project.urls]
 Homepage = "https://github.com/maciekaz/ESET-MCP"

@@ -3,7 +3,6 @@
 These tests intentionally try to break the isolation guarantees the README
 makes:
 
-- ContextVar credentials must not bleed between concurrent requests.
 - The client pool must hand the SAME client to repeated same-credential
   requests and DIFFERENT clients to different credentials, even under
   concurrent access.
@@ -18,33 +17,24 @@ deterministic. Marked with ``concurrency`` for grouping.
 from __future__ import annotations
 
 import asyncio
-import base64
-from contextvars import copy_context
 
 import httpx
-import pytest
 import respx
 
 from eset_mcp.auth import CloudTokenManager
 from eset_mcp.client_pool import ClientPool
 from eset_mcp.config import Settings
-from eset_mcp.credentials import (
-    BasicAuthCredentialResolver,
-    Credentials,
-    request_credentials,
-)
+from eset_mcp.credentials import Credentials
 
 
 def _make_settings(**overrides) -> Settings:
     """Build a Settings without touching .env."""
     import os
     base = {
-        "ESET_AUTH_MODE": "basic",
-        "ESET_USER": "",
-        "ESET_PASSWORD": "",
-        "ESET_MODE": "RO",
+        "ESET_USER": "u@example.com",
+        "ESET_PASSWORD": "pw",
         "ESET_REGION": "eu",
-        "ESET_MCP_TRANSPORT": "http",
+        "ESET_MCP_TRANSPORT": "stdio",
         "ESET_DEPLOYMENT": "cloud",
         "ESET_MCP_METRICS_ENABLED": "false",
         "ESET_MCP_LOG_FORMAT": "text",
@@ -61,61 +51,6 @@ def _make_settings(**overrides) -> Settings:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-
-
-# --- ContextVar isolation ---
-async def test_contextvar_isolation_under_100_concurrent_tasks() -> None:
-    """100 tasks each set the ContextVar to their own creds and then read it
-    back after a couple of awaits. No task may observe another's creds.
-    """
-    settings = _make_settings()
-    resolver = BasicAuthCredentialResolver(settings)
-
-    async def one_task(idx: int) -> str:
-        creds = Credentials(user=f"user-{idx}", password=f"pw-{idx}", region="eu")
-        # Each task gets its own ContextVar copy (asyncio.Task semantics).
-        token = request_credentials.set(creds)
-        try:
-            # Force a couple of suspension points so the scheduler interleaves us
-            # with all the other tasks.
-            await asyncio.sleep(0)
-            await asyncio.sleep(0.001)
-            await asyncio.sleep(0)
-            seen = resolver.resolve()
-            return seen.user
-        finally:
-            request_credentials.reset(token)
-
-    # Each task must run in its own asyncio.Task (otherwise ContextVar is shared).
-    results = await asyncio.gather(*(asyncio.create_task(one_task(i)) for i in range(100)))
-    assert results == [f"user-{i}" for i in range(100)], (
-        "ContextVar bled between concurrent tasks - tenant isolation broken"
-    )
-
-
-async def test_contextvar_copied_not_shared_into_child_tasks() -> None:
-    """A child task launched from inside one parent must see the parent's
-    ContextVar value, NOT some other parent's. Verifies the asyncio.Task
-    copy-on-spawn semantics that everything else relies on.
-    """
-    seen: dict[int, str] = {}
-
-    async def child(idx: int) -> None:
-        # No further set() in the child - it should inherit the parent's.
-        await asyncio.sleep(0.001)
-        creds = request_credentials.get()
-        seen[idx] = creds.user if creds else "(none)"
-
-    async def parent(idx: int) -> None:
-        creds = Credentials(user=f"u{idx}", password="pw", region="eu")
-        token = request_credentials.set(creds)
-        try:
-            await asyncio.create_task(child(idx))
-        finally:
-            request_credentials.reset(token)
-
-    await asyncio.gather(*(parent(i) for i in range(50)))
-    assert seen == {i: f"u{i}" for i in range(50)}
 
 
 # --- Client pool concurrency ---
@@ -332,75 +267,3 @@ async def test_cloud_and_onprem_same_user_independent_clients() -> None:
         assert t_onprem == "ONPREM_TOKEN"
     finally:
         await pool.close()
-
-
-# --- End-to-end through the ASGI middleware ---
-async def test_concurrent_basic_auth_requests_carry_their_own_creds() -> None:
-    """50 concurrent HTTP requests, each carrying its own Basic auth + maybe
-    its own X-ESET-Server-URL. The middleware must stash each request's
-    creds in the ContextVar without bleed."""
-    from starlette.applications import Starlette
-    from starlette.responses import JSONResponse
-    from starlette.routing import Route
-
-    from eset_mcp.middleware import BasicAuthCredentialsMiddleware
-
-    seen: list[tuple[str, str, str]] = []
-    seen_lock = asyncio.Lock()
-
-    async def _echo(_request):
-        # Yield a few times to interleave with other concurrent handlers.
-        await asyncio.sleep(0)
-        await asyncio.sleep(0.001)
-        await asyncio.sleep(0)
-        creds = request_credentials.get()
-        async with seen_lock:
-            seen.append((creds.user, creds.deployment, creds.server_url))
-        return JSONResponse({"ok": True})
-
-    settings = _make_settings(ESET_AUTH_MODE="basic", ESET_MCP_TRANSPORT="http")
-    app = Starlette(routes=[Route("/echo", _echo)])
-    app.add_middleware(BasicAuthCredentialsMiddleware, settings=settings)
-
-    def _basic(u: str, p: str = "pw") -> str:
-        return "Basic " + base64.b64encode(f"{u}:{p}".encode()).decode()
-
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        async def one(i: int) -> None:
-            headers = {"authorization": _basic(f"user-{i}")}
-            # Half the requests target on-prem, half cloud.
-            if i % 2 == 0:
-                headers["x-eset-server-url"] = f"https://onprem-{i}.local:9443"
-            r = await client.get("/echo", headers=headers)
-            assert r.status_code == 200
-
-        await asyncio.gather(*(one(i) for i in range(50)))
-
-    # Every request must show up exactly once, with its own creds.
-    by_user = {u: (dep, url) for (u, dep, url) in seen}
-    assert len(by_user) == 50
-    for i in range(50):
-        dep, url = by_user[f"user-{i}"]
-        if i % 2 == 0:
-            assert dep == "onprem"
-            assert url == f"https://onprem-{i}.local:9443"
-        else:
-            assert dep == "cloud"
-            assert url == ""
-
-
-# --- ContextVar leaking into module-level coroutines ---
-async def test_resolver_never_sees_stale_contextvar_after_reset() -> None:
-    """After the middleware resets the ContextVar, the resolver must raise -
-    no stale value from a previous request leaks into the next one."""
-    settings = _make_settings()
-    resolver = BasicAuthCredentialResolver(settings)
-    # Pretend a previous request ran:
-    token = request_credentials.set(Credentials(user="prev", password="p", region="eu"))
-    request_credentials.reset(token)
-    # Fresh context mimics the next request's task:
-    ctx = copy_context()
-    from eset_mcp.credentials import CredentialResolverError
-    with pytest.raises(CredentialResolverError):
-        ctx.run(resolver.resolve)

@@ -7,8 +7,9 @@ builds a ToolDef with:
 - input_schema   - built from parameters + requestBody (with $refs resolved)
 - service        - OpenAPI spec basename (used to map to a domain)
 - method, path
-- read_only      - True if HTTP method is GET, False otherwise
-- destructive    - True for DELETE/POST/PUT/PATCH (used for MCP annotations)
+
+The server is read-only: only GET operations become tools. Write operations
+(POST/PUT/PATCH/DELETE) are never loaded, so they cannot be called at all.
 """
 from __future__ import annotations
 
@@ -17,8 +18,6 @@ import re
 from dataclasses import dataclass, field
 from importlib import resources
 from typing import Any
-
-from .config import Mode
 
 # OpenAPI service name → short tool-name prefix (more readable for the agent).
 _SERVICE_PREFIX: dict[str, str] = {
@@ -42,6 +41,11 @@ _SERVICE_PREFIX: dict[str, str] = {
 
 _RO_METHODS = {"get"}
 
+# Services whose read endpoints are deliberately not exposed.
+# installer-management: GET /v1/installers returns download links that enrol
+# new machines into the tenant - not something an analyst assistant needs.
+_EXCLUDED_SERVICES: set[str] = {"installer-management"}
+
 
 @dataclass
 class ToolDef:
@@ -52,16 +56,6 @@ class ToolDef:
     method: str
     path: str
     operation_id: str
-    read_only: bool
-
-    @property
-    def required_mode(self) -> Mode:
-        return "RO" if self.read_only else "RW"
-
-    @property
-    def destructive(self) -> bool:
-        # Treat POST/PUT/PATCH/DELETE as potentially destructive; only GET is pure RO.
-        return not self.read_only
 
     # Lists of path / query parameter names - needed at runtime when building
     # the URL and the query string.
@@ -94,6 +88,8 @@ def load_all_tools() -> list[ToolDef]:
         if entry.name in _NON_SPEC_FILES:
             continue
         service = entry.stem  # "device-management"
+        if service in _EXCLUDED_SERVICES:
+            continue
         spec = json.loads(entry.read_text(encoding="utf-8"))
         tools.extend(_tools_from_spec(service, spec))
     _disambiguate_names(tools)
@@ -173,7 +169,7 @@ def _tools_from_spec(service: str, spec: dict[str, Any]) -> list[ToolDef]:
     out: list[ToolDef] = []
     for path, ops in spec.get("paths", {}).items():
         for method, op in ops.items():
-            if method.lower() not in {"get", "post", "put", "patch", "delete"}:
+            if method.lower() not in _RO_METHODS:
                 continue
             op_id = op.get("operationId") or _fallback_op_id(method, path)
             name = f"{prefix}_{_snake(op_id)}"
@@ -186,12 +182,7 @@ def _tools_from_spec(service: str, spec: dict[str, Any]) -> list[ToolDef]:
             path_params = [p["name"] for p in params if p.get("in") == "path"]
             query_params = [p["name"] for p in params if p.get("in") == "query"]
 
-            input_schema = _build_input_schema(
-                params,
-                op.get("requestBody"),
-                spec,
-                is_read_only=method.lower() in _RO_METHODS,
-            )
+            input_schema = _build_input_schema(params, op.get("requestBody"), spec)
             has_body = bool(op.get("requestBody"))
 
             out.append(
@@ -203,7 +194,6 @@ def _tools_from_spec(service: str, spec: dict[str, Any]) -> list[ToolDef]:
                     method=method.upper(),
                     path=path,
                     operation_id=op_id,
-                    read_only=method.lower() in _RO_METHODS,
                     path_params=path_params,
                     query_params=query_params,
                     has_body=has_body,
@@ -226,14 +216,12 @@ def _build_input_schema(
     params: list[dict[str, Any]],
     request_body: dict[str, Any] | None,
     spec: dict[str, Any],
-    *,
-    is_read_only: bool = False,
 ) -> dict[str, Any]:
     """Assemble a JSON Schema for the tool's input.
 
     Path / query params become individual properties.
     Request body becomes a `body` property with the schema resolved.
-    Read-only (GET) tools additionally expose a synthetic ``fields`` property
+    Every tool additionally exposes a synthetic ``fields`` property
     - a server-side projection (NOT a native ESET API parameter) that filters
     every list-item in the response down to the requested keys, drastically
     reducing token usage when the agent only needs a few attributes.
@@ -260,18 +248,17 @@ def _build_input_schema(
             if request_body.get("required"):
                 required.append("body")
 
-    if is_read_only:
-        properties["fields"] = {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": (
-                "Optional server-side projection: return only these keys for "
-                "each list-item in the response. Reduces token usage on "
-                "large list endpoints. Example: ['uuid','displayName']. "
-                "Top-level fields (e.g. nextPageToken) are always preserved. "
-                "Not forwarded to ESET - applied locally after fetch."
-            ),
-        }
+    properties["fields"] = {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": (
+            "Optional server-side projection: return only these keys for "
+            "each list-item in the response. Reduces token usage on "
+            "large list endpoints. Example: ['uuid','displayName']. "
+            "Top-level fields (e.g. nextPageToken) are always preserved. "
+            "Not forwarded to ESET - applied locally after fetch."
+        ),
+    }
 
     return {
         "type": "object",

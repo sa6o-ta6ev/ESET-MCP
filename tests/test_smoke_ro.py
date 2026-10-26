@@ -10,39 +10,16 @@ import pytest
 pytestmark = pytest.mark.ro
 
 
-async def test_catalog_size_in_ro_mode(mcp_session) -> None:
-    """In RO mode the catalog exposes ONLY read-only tools - RW tools are hidden entirely.
-
-    Counts: 47 RO from OpenAPI + 4 hand-written composites (all RO) = 51 tools.
-    """
-    import os
-    assert os.getenv("ESET_MODE", "RO").upper() == "RO", \
-        "This test only makes sense in RO mode."
+async def test_catalog_is_read_only(mcp_session) -> None:
+    """The catalog exposes only read-only tools: generated GET tools + 4 composites."""
+    from eset_mcp.tools_loader import load_all_tools
     async with mcp_session() as client:
         tools = await client.list_tools()
-        assert len(tools.tools) == 51, (
-            f"expected 51 tools (RO + composites) in RO mode, got {len(tools.tools)}"
-        )
-        # Every listed tool must declare readOnlyHint=True.
+        assert len(tools.tools) == len(load_all_tools()) + 4
         for t in tools.tools:
-            assert t.annotations and t.annotations.readOnlyHint, (
-                f"{t.name} surfaced in RO mode despite readOnlyHint != True"
+            assert t.annotations and t.annotations.read_only_hint, (
+                f"{t.name} listed without read_only_hint=True"
             )
-
-
-async def test_rw_tools_hidden_in_ro_mode(mcp_session) -> None:
-    """Pick a known RW tool name and make sure list_tools doesn't expose it in RO."""
-    async with mcp_session() as client:
-        tools = await client.list_tools()
-        names = {t.name for t in tools.tools}
-        rw_examples = {
-            "device_devices__move_device",         # POST :move
-            "asset_groups__create_group",           # POST /v1/groups
-            "asset_groups__delete_group",           # DELETE
-            "policy_policies__assign_policy_v2",    # POST :assign
-        }
-        leaked = rw_examples & names
-        assert not leaked, f"RW tools leaked into RO catalog: {leaked}"
 
 
 async def test_composite_tools_present(mcp_session) -> None:
@@ -62,7 +39,6 @@ async def test_resources_exposed(mcp_session) -> None:
     async with mcp_session() as client:
         resources = await client.list_resources()
         uris = {str(r.uri) for r in resources.resources}
-        assert "eset://config/mode" in uris
         assert "eset://config/region" in uris
         assert "eset://config/tools-catalog" in uris
 
@@ -77,11 +53,11 @@ async def test_resources_readable(mcp_session) -> None:
             assert content.contents[0].text, f"no text for {r.uri}"
 
 
-async def test_list_device_groups(mcp_session) -> None:
+async def test_list_device_groups(mcp_session, tool_name) -> None:
     """RO endpoint /v1/device_groups - must return a list under `deviceGroups`."""
     async with mcp_session() as client:
         result = await client.call_tool(
-            "device_device_groups__list_groups", arguments={"pageSize": 5}
+            tool_name("/v1/device_groups"), arguments={"pageSize": 5}
         )
     payload = json.loads(result.content[0].text)
     assert "deviceGroups" in payload
@@ -91,10 +67,10 @@ async def test_list_device_groups(mcp_session) -> None:
         assert "uuid" in g and "displayName" in g
 
 
-async def test_list_managed_devices(mcp_session) -> None:
+async def test_list_managed_devices(mcp_session, tool_name) -> None:
     async with mcp_session() as client:
         result = await client.call_tool(
-            "device_devices__list_devices", arguments={"pageSize": 5}
+            tool_name("/v1/devices"), arguments={"pageSize": 5}
         )
     text = result.content[0].text
     if text.startswith("ESET API error:"):
@@ -104,11 +80,11 @@ async def test_list_managed_devices(mcp_session) -> None:
     assert isinstance(payload["devices"], list)
 
 
-async def test_list_tasks(mcp_session) -> None:
+async def test_list_tasks(mcp_session, tool_name) -> None:
     """Automation /v1/device_tasks."""
     async with mcp_session() as client:
         result = await client.call_tool(
-            "task_device_tasks__list_tasks", arguments={"pageSize": 5}
+            tool_name("/v1/device_tasks"), arguments={"pageSize": 5}
         )
     text = result.content[0].text
     if text.startswith("ESET API error:"):
@@ -117,9 +93,9 @@ async def test_list_tasks(mcp_session) -> None:
     assert "deviceTasks" in payload or "tasks" in payload
 
 
-async def test_list_users(mcp_session) -> None:
+async def test_list_users(mcp_session, tool_name) -> None:
     async with mcp_session() as client:
-        result = await client.call_tool("user_users__list_users", arguments={"pageSize": 5})
+        result = await client.call_tool(tool_name("/v1/users"), arguments={"pageSize": 5})
     text = result.content[0].text
     if text.startswith("ESET API error:"):
         pytest.skip(f"user-management not available for this account: {text}")
@@ -128,11 +104,11 @@ async def test_list_users(mcp_session) -> None:
 
 
 # --- Response shaping: live verification ---
-async def test_fields_projection_returns_skinny_rows(mcp_session) -> None:
+async def test_fields_projection_returns_skinny_rows(mcp_session, tool_name) -> None:
     """`fields=['uuid','displayName']` must drop every other key per device."""
     async with mcp_session() as client:
         result = await client.call_tool(
-            "device_devices__list_devices",
+            tool_name("/v1/devices"),
             arguments={"pageSize": 5, "fields": ["uuid", "displayName"]},
         )
     payload = json.loads(result.content[0].text)
@@ -147,7 +123,7 @@ async def test_fields_projection_returns_skinny_rows(mcp_session) -> None:
         assert "uuid" in device, "uuid must survive projection"
 
 
-async def test_response_size_cap_kicks_in_on_large_payload(mcp_session) -> None:
+async def test_response_size_cap_kicks_in_on_large_payload(mcp_session, tool_name) -> None:
     """Forcing pageSize=1000 should overflow the default 100 KB cap.
 
     The response must (a) still be valid JSON, (b) carry a `_capped` metadata
@@ -156,7 +132,7 @@ async def test_response_size_cap_kicks_in_on_large_payload(mcp_session) -> None:
     """
     async with mcp_session() as client:
         result = await client.call_tool(
-            "device_devices__list_devices",
+            tool_name("/v1/devices"),
             arguments={"pageSize": 1000},
         )
     text = result.content[0].text
@@ -181,14 +157,14 @@ async def test_response_size_cap_kicks_in_on_large_payload(mcp_session) -> None:
     assert "pageSize" in meta["hint"] or "nextPageToken" in meta["hint"]
 
 
-async def test_fields_projection_lets_more_items_fit_under_cap(mcp_session) -> None:
+async def test_fields_projection_lets_more_items_fit_under_cap(mcp_session, tool_name) -> None:
     """Projection should materially increase how many items survive the cap."""
     async with mcp_session() as client:
         fat = await client.call_tool(
-            "device_devices__list_devices", arguments={"pageSize": 1000}
+            tool_name("/v1/devices"), arguments={"pageSize": 1000}
         )
         skinny = await client.call_tool(
-            "device_devices__list_devices",
+            tool_name("/v1/devices"),
             arguments={"pageSize": 1000, "fields": ["uuid", "displayName"]},
         )
     fat_payload = json.loads(fat.content[0].text)

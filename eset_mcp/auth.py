@@ -166,13 +166,18 @@ TokenManager = CloudTokenManager
 class OnPremTokenManager(_TokenManagerBase):
     """Token manager for on-prem ESET PROTECT consoles.
 
-    Wire format (verified against Fenrindale/eset-protect-mcp's reference
-    TypeScript client, which talks to ESET PROTECT On-Prem 13.0+):
+    Wire format (ESET PROTECT On-Prem 13.0+, per ESET's "Set up the ESET
+    PROTECT On-Prem REST API" help page, which shows a camelCase
+    ``grantType``; ``is_domain_user`` for Active Directory API users comes
+    from Fenrindale/eset-protect-mcp's client as of 2026-08):
 
         POST {server_url}/GetTokens
         Content-Type: application/json
 
-        {"username": "...", "password": "...", "grant_type": "password"}
+        {"username": "...", "password": "...", "grantType": "password"}
+
+    ``"is_domain_user": true`` is added only when the API user is an Active
+    Directory account (``ESET_ONPREM_DOMAIN_USER=true``).
 
     Successful response (HTTP 200):
 
@@ -186,11 +191,13 @@ class OnPremTokenManager(_TokenManagerBase):
 
     async def _refresh_locked(self) -> None:
         url = resolve_auth_url(self._creds)
-        body = {
+        body: dict[str, object] = {
             "username": self._creds.user,
             "password": self._creds.password,
-            "grant_type": "password",
+            "grantType": "password",
         }
+        if self._creds.domain_user:
+            body["is_domain_user"] = True
         resp = await self._http.post(
             url,
             json=body,

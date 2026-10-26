@@ -60,9 +60,7 @@ def resolve_base_url(creds: Credentials, service: str) -> str:
     if creds.deployment == "onprem":
         if not creds.server_url:
             raise RuntimeError(
-                "On-prem credentials without a server URL. In env mode set "
-                "ESET_ONPREM_SERVER_URL; in basic-auth mode send the "
-                "X-ESET-Server-URL header."
+                "On-prem credentials without a server URL. Set ESET_ONPREM_SERVER_URL."
             )
         return creds.server_url
     return base_url(creds.region, service)
@@ -79,9 +77,7 @@ def resolve_auth_url(creds: Credentials) -> str:
     if creds.deployment == "onprem":
         if not creds.server_url:
             raise RuntimeError(
-                "On-prem credentials without a server URL. In env mode set "
-                "ESET_ONPREM_SERVER_URL; in basic-auth mode send the "
-                "X-ESET-Server-URL header."
+                "On-prem credentials without a server URL. Set ESET_ONPREM_SERVER_URL."
             )
         return f"{creds.server_url}/GetTokens"
     return auth_url(creds.region)

@@ -31,12 +31,12 @@ async def test_search_basic(mcp_session) -> None:
         pytest.fail("Search returned 0 matches for every well-known group name - unexpected.")
 
 
-async def test_search_case_insensitive_substring(mcp_session) -> None:
+async def test_search_case_insensitive_substring(mcp_session, tool_name) -> None:
     """Search must be case-insensitive and do substring (not exact / not regex)."""
     async with mcp_session() as client:
         # Find any device, then look for half its name in different case.
         listing = await client.call_tool(
-            "device_device_groups__list_groups", arguments={"pageSize": 5}
+            tool_name("/v1/device_groups"), arguments={"pageSize": 5}
         )
         groups = json.loads(listing.content[0].text).get("deviceGroups", [])
         if not groups:
@@ -87,12 +87,12 @@ async def test_search_graceful_per_kind_failure(mcp_session) -> None:
             assert key in payload
 
 
-async def test_device_full_profile_real_uuid(mcp_session) -> None:
+async def test_device_full_profile_real_uuid(mcp_session, tool_name) -> None:
     """Pick any device via search, run the full profile, sanity-check the shape."""
     async with mcp_session() as client:
         # First grab a device via list endpoint.
         r0 = await client.call_tool(
-            "device_devices__list_devices", arguments={"pageSize": 1}
+            tool_name("/v1/devices"), arguments={"pageSize": 1}
         )
         text0 = r0.content[0].text
         if text0.startswith("ESET API error:"):

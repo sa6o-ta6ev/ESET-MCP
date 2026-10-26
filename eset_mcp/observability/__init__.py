@@ -1,10 +1,12 @@
-"""Observability layer: structured logging + Prometheus metrics.
+"""Observability layer: structured logging, Prometheus metrics, usage log.
 
-Two independent outputs from the same instrumentation events:
+Three independent outputs from the same instrumentation events:
 
 - :mod:`eset_mcp.observability.logging` - JSON Lines or human text to stderr.
 - :mod:`eset_mcp.observability.metrics` - Prometheus counters / histograms /
-  gauges exposed via an optional ``/metrics`` endpoint.
+  gauges exposed via an optional ``/metrics`` endpoint (HTTP transport only).
+- :mod:`eset_mcp.observability.usage` - optional append-only file with one
+  record per tool call, summarised by ``eset-mcp-stats`` (any transport).
 
 Design rules (enforced in code, not just docs):
 
@@ -33,6 +35,7 @@ from .metrics import (
     observe_tool_duration,
     set_pool_size,
 )
+from .usage import record_usage
 
 __all__ = [
     "configure_logging",
@@ -44,5 +47,6 @@ __all__ = [
     "metrics_asgi_app",
     "observe_response_bytes",
     "observe_tool_duration",
+    "record_usage",
     "set_pool_size",
 ]
