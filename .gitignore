@@ -36,3 +36,6 @@ logs/
 
 # ───────── Claude Code per-session worktrees (out of scope for the repo) ─────
 .claude/
+
+# ───────── Tool-usage log (ESET_MCP_USAGE_LOG) ─────────
+*.jsonl

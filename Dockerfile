@@ -1,36 +1,32 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.13-slim
 
-# OCI image metadata. Most fields are overridden by docker/metadata-action
-# in the publish-image workflow (source SHA, version, etc.); the values
-# here are sensible defaults for local builds.
 LABEL org.opencontainers.image.title="ESET-MCP" \
-      org.opencontainers.image.description="MCP server for the ESET ecosystem (Connect cloud + PROTECT On-Prem)" \
-      org.opencontainers.image.source="https://github.com/maciekaz/ESET-MCP" \
-      org.opencontainers.image.url="https://github.com/maciekaz/ESET-MCP" \
-      org.opencontainers.image.documentation="https://github.com/maciekaz/ESET-MCP#readme" \
-      org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.vendor="maciekaz" \
-      io.modelcontextprotocol.server.name="io.github.maciekaz/eset-mcp"
+      org.opencontainers.image.description="Read-only MCP server for ESET (Connect cloud + PROTECT On-Prem)" \
+      org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+# uv installs exactly the versions pinned in uv.lock.
+COPY --from=ghcr.io/astral-sh/uv:0.11.23 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Deps layer: pyproject + LICENSE + README are everything pip needs to
-# resolve the project; copying them first keeps this layer warm across
-# code-only rebuilds. BuildKit cache mount survives between builds and
-# turns a cold rebuild from ~30s to ~3s.
-COPY pyproject.toml README.md LICENSE ./
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip setuptools wheel
+# Deps layer: only the lockfile and project metadata, so code-only changes
+# keep this layer cached.
+COPY pyproject.toml uv.lock README.md LICENSE ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --extra metrics --no-install-project
 
-# Source layer: code changes invalidate this and below, but the deps
-# above stay cached.
+# Source layer.
 COPY eset_mcp ./eset_mcp
-RUN --mount=type=cache,target=/root/.cache/pip pip install .
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --extra metrics
+
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Defaults: stdio. For HTTP, expose the port (override in docker-compose).
 ENV ESET_MCP_TRANSPORT=stdio \
@@ -40,7 +36,7 @@ ENV ESET_MCP_TRANSPORT=stdio \
 EXPOSE 8765
 
 # Drop privileges. Non-root by uid 10001 so it never collides with a
-# host user. /app is owned by esetmcp so future writes work without root.
+# host user.
 RUN useradd --create-home --uid 10001 esetmcp && chown -R esetmcp:esetmcp /app
 USER esetmcp
 

@@ -2,86 +2,53 @@
 
 ## Reporting a vulnerability
 
-**Please do not file public GitHub issues for security problems.**
+Do not open public issues for security problems. Use a private security
+advisory on this repository (Security → Advisories → Report a
+vulnerability), or contact the repository owner directly.
 
-Open a private security advisory instead:
-
+Issues in the original project can also be reported upstream:
 <https://github.com/maciekaz/ESET-MCP/security/advisories/new>
 
-I aim to acknowledge reports within 72 hours and to ship a fix or a
-documented mitigation within two weeks for high/critical severity issues.
+## Security properties and where they are tested
 
-## Scope
+- **Read-only by construction.** Only GET operations from the OpenAPI specs
+  become tools; write operations are never loaded. Installer endpoints
+  (enrolment links) are excluded.
+  `tests/test_catalog_vs_openapi.py`, `tests/test_server_offline.py`.
+- **Tool arguments are validated** against each tool's schema before any
+  request is made, and path parameters are URL-encoded into a single path
+  segment (`../users` cannot reach another endpoint).
+  `tests/test_server_offline.py`.
+- **Fixed upstream hosts.** Cloud requests go only to
+  `{region}.*.eset.systems`; on-prem requests go only to
+  `ESET_ONPREM_SERVER_URL` from `.env` (HTTPS required). Clients cannot
+  choose the target host.
+- **No secrets in logs.** `eset_mcp/observability/logging.py` drops any
+  field whose name matches `password` / `secret` / `token` /
+  `authorization` / `cookie` / `api_key` / `bearer` / `credentials` /
+  `cf-access-client-*`. `tests/test_observability.py`.
+- **Usage log carries no data.** Records hold tool name, success flag,
+  status and duration only - never arguments or results.
+  `tests/test_usage.py`.
+- **No secrets on disk** beyond `.env` itself. OAuth tokens live in process
+  memory only.
+- **Stateless HTTP transport.** No MCP sessions, so nothing to hijack or
+  leak between clients.
 
-In scope:
+Not in place (do not assume them): authentication on the HTTP endpoint,
+dependency or SAST scanning in CI, secret scanning.
 
-- Anything in the `eset_mcp/` package (auth, credentials, middleware,
-  client pool, HTTP client, observability, tools loader).
-- The `Dockerfile`, `docker-compose.yml`, and `Caddyfile` shipped in
-  this repo.
-- The CI workflow under `.github/workflows/`.
+## Operator checklist
 
-Out of scope (report directly to the upstream maintainer):
-
-- Vulnerabilities in the [Model Context Protocol SDK](https://github.com/modelcontextprotocol/python-sdk),
-  `httpx`, `pydantic`, `python-dotenv`, `starlette`, `uvicorn`, or
-  `prometheus-client`.
-- Vulnerabilities in the ESET Connect API itself or in ESET PROTECT
-  On-Prem (those belong to ESET's security team).
-- Misconfigurations in your own deployment (e.g. running `basic` auth
-  mode over plain HTTP, leaving `ESET_ONPREM_VERIFY_SSL=false` on
-  the public internet, exposing `/metrics` without network ACLs).
-
-## Verified security properties
-
-These are continuously tested in CI:
-
-- **Credential isolation between tenants**. ContextVar-scoped credentials
-  per request; per-tenant OAuth token managers; pool keyed by
-  `(user, password_hash, deployment, region_or_url, cf_secret_hash)`;
-  one tenant's auth failure does not affect any other tenant. See
-  `tests/test_concurrency.py`.
-- **No secrets in logs**. Defensive deny-list in
-  `eset_mcp/observability/logging.py` drops any field whose name matches
-  `password` / `secret` / `token` / `authorization` / `cookie` /
-  `api_key` / `bearer` / `credentials` / `cf-access-client-*` before any
-  formatter sees it. Tested in `tests/test_observability.py`, including
-  assertions that the raw secret bytes never appear in the output line.
-- **No secrets on disk**. OAuth tokens live in process memory only;
-  basic-auth credentials are never written back to the filesystem.
-- **TLS required for basic auth**. The server enforces HTTP transport
-  for `ESET_AUTH_MODE=basic` at startup; production deployments must
-  front it with TLS (the `prod` docker-compose profile uses Caddy +
-  Let's Encrypt).
-- **RO/RW defence-in-depth**. Even in RO mode, write tools are both
-  hidden from `list_tools` AND blocked at `call_tool` before any HTTP
-  request goes out.
-- **Dependency scanning**. Snyk SCA on every CI run; `prometheus-client`
-  is an opt-in extra so default installs have a minimal dep surface.
-- **SAST**. Snyk Code on every CI run; current count: 0 issues.
-- **Secret scanning**. gitleaks with a project-specific allowlist
-  for the OAuth RFC 6749 example values present in the bundled ESET
-  OpenAPI spec. Current count: 0 leaks.
-
-## Hardening checklist for operators
-
-When you deploy ESET-MCP in production:
-
-1. Use `ESET_AUTH_MODE=basic` only behind TLS (the `prod` compose
-   profile + Caddy handles this for you).
-2. Leave `ESET_ONPREM_VERIFY_SSL=true` unless you genuinely need to
-   talk to an on-prem console with a self-signed cert on a trusted
-   network.
-3. Protect `/metrics` at the network layer (private subnet, VPN, or a
-   Caddy ACL). The endpoint carries no secrets but does carry
-   per-tenant activity counts.
-4. Use a **dedicated** ESET API user (not your console login). Give it
-   the minimum Permission Set required for the tools you expose.
-5. Rotate basic-auth credentials and Cloudflare Access service tokens
-   on the schedule your organisation requires. The MCP server picks
-   up new credentials on the next request - no restart needed.
-6. Set `ESET_LOG_LEVEL=WARNING` (or `ERROR`) on chatty deployments to
-   suppress per-call INFO events while keeping retries / errors
-   visible.
-7. Pin a specific image digest (not just the `latest` tag) when
-   deploying via Docker.
+1. Use a **dedicated** ESET API user with a **read-only** permission set.
+   That is the control ESET itself enforces; the server's read-only design
+   is a second layer.
+2. Keep `.env` readable only by you (`chmod 600 .env`).
+3. Keep the HTTP transport on `127.0.0.1`, or put an authenticating proxy
+   in front of it. It has no authentication of its own.
+4. Leave `ESET_ONPREM_VERIFY_SSL=true` unless the console uses a
+   self-signed certificate on a trusted network.
+5. Treat data returned from ESET (device names, command lines, file paths)
+   as untrusted input to the model: it originates on endpoints and can
+   contain attacker-written text.
+6. Install with `uv sync --locked` so dependency versions match `uv.lock`.
