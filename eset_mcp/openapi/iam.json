@@ -1,7 +1,7 @@
 {
   "openapi": "3.0.1",
   "info": {
-    "title": "ESET Connect - Identity",
+    "title": "ESET Connect - Identity and Access Management",
     "description": "<h3>ESET Connect help:</h3><a href=https://help.eset.com/eset_connect/en-US/>https://help.eset.com/eset_connect/en-US/</a>",
     "version": "1.0"
   },
@@ -29,7 +29,7 @@
         ],
         "summary": "List permissions",
         "description": "List all possible permissions.",
-        "operationId": "Permissions_ListPermissions",
+        "operationId": "V2_Permissions_ListPermissions",
         "parameters": [
           {
             "name": "pageSize",
@@ -254,8 +254,8 @@
           "IdentityProvider"
         ],
         "summary": "List roles",
-        "description": "List [role]s of [subject]s.\n\n> **Info:**\n> Not only Users are [subject]s, but anything that can have roles attached. For example, Devices.\n\n> **Info:**\n> Modeled after [List role assignments](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-list-portal).\n\nMight be filtered by the specified [subject] or [scope]s.\n\nIf the filters are left empty, all the roles available to the caller are returned.\n\nExample:\nRequest*\n```yaml\n---\nscopes:\n- msp_uuid: af631cc9-3e9f-4fd7-8f29-ed8121b4cf8a\n```\n\nResponse*\n```yaml\n---\nassignments:\n- subject_reference: 286f5456-a0ac-4e8a-8508-5c2224b47ae6\nroles:\n- role_name: admin\nscopes:\n- msp_uuid: af631cc9-3e9f-4fd7-8f29-ed8121b4cf8a\n- customer_uuid: 30bd93aa-c0ef-4fcf-a73f-ce80610bd161\n- role_name: auditor\nscopes:\n- msp_uuid: 30bd93aa-c0ef-4fcf-a73f-ce80610bd161\n- subject_reference: ae9e45d2-9ee6-43e7-9b68-a650d62eeff1\nroles:\n- role_name: admin\nscopes:\n- msp_uuid: af631cc9-3e9f-4fd7-8f29-ed8121b4cf8a\n- customer_uuid: ff572f63-8965-47da-9d9d-cb994dc9da10\n- role_name: auditor\nscopes:\n- msp_uuid: af631cc9-3e9f-4fd7-8f29-ed8121b4cf8a\n- customer_uuid: 30bd93aa-c0ef-4fcf-a73f-ce80610bd161\n```",
-        "operationId": "IdentityProvider_ListRoles",
+        "description": "@deprecated Use `ListRoleAssignments` instead. This method will be removed in a future version.\n\nList [role]s of [subject]s.\n\n> **Info:**\n> Not only Users are [subject]s, but anything that can have roles attached. For example, Devices.\n\n> **Info:**\n> Modeled after [List role assignments](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-list-portal).\n\nMight be filtered by the specified [subject] or [scope]s.\n\nIf the filters are left empty, all the roles available to the caller are returned.\n\nExample:\nRequest*\n```yaml\n---\nscopes:\n- msp_uuid: af631cc9-3e9f-4fd7-8f29-ed8121b4cf8a\n```\n\nResponse*\n```yaml\n---\nassignments:\n- subject_reference: 286f5456-a0ac-4e8a-8508-5c2224b47ae6\nroles:\n- role_name: admin\nscopes:\n- msp_uuid: af631cc9-3e9f-4fd7-8f29-ed8121b4cf8a\n- customer_uuid: 30bd93aa-c0ef-4fcf-a73f-ce80610bd161\n- role_name: auditor\nscopes:\n- msp_uuid: 30bd93aa-c0ef-4fcf-a73f-ce80610bd161\n- subject_reference: ae9e45d2-9ee6-43e7-9b68-a650d62eeff1\nroles:\n- role_name: admin\nscopes:\n- msp_uuid: af631cc9-3e9f-4fd7-8f29-ed8121b4cf8a\n- customer_uuid: ff572f63-8965-47da-9d9d-cb994dc9da10\n- role_name: auditor\nscopes:\n- msp_uuid: af631cc9-3e9f-4fd7-8f29-ed8121b4cf8a\n- customer_uuid: 30bd93aa-c0ef-4fcf-a73f-ce80610bd161\n```",
+        "operationId": "V2_IdentityProvider_ListRoles",
         "parameters": [
           {
             "name": "includeNestedScopes",
@@ -333,7 +333,7 @@
           {
             "name": "orderBy",
             "in": "query",
-            "description": "Comma-separated list of fields (from the request resource).\n\nAllowed formats are:\n- [snake_case version of the field name](https://developers.google.com/protocol-buffers/docs/style#message_and_field_names) as used by protocol buffers.\n- [JSON version of the field name](https://developers.google.com/protocol-buffers/docs/proto3#json)\n\nThe syntax is described at [Standard Methods: List Ordering](https://google.aip.dev/132#ordering)",
+            "description": "Comma-separated list of fields (from the request resource).\n\nFor example, a result set will be ordered by `display name` and `severity level` in descending order, what can be encoded as `display_name, SeverityLevel desc`.\n\nAllowed formats are:\n- [snake_case version of the field name](https://developers.google.com/protocol-buffers/docs/style#message_and_field_names) as used by protocol buffers.\n- [JSON version of the field name](https://protobuf.dev/programming-guides/proto3/#json)\n\nThe syntax is described at [Standard Methods: List Ordering](https://google.aip.dev/132#ordering)",
             "required": false,
             "style": "form",
             "explode": true,
@@ -540,7 +540,7 @@
         ],
         "summary": "Assign role",
         "description": "Assign a role to a subject. Eventually, the subject ends with its existing roles and those assigned by this operation.\n\nFor example:\n\"User X\" is an \"admin\" of the Subscription B. \n`AssignRole( \"User X\", { \"admin\", [\"Subscription A\", \"Subscription C\"]) `\nleaves the user being an admin of the Subscriptions A, B, and C.",
-        "operationId": "IdentityProvider_AssignRole",
+        "operationId": "V2_IdentityProvider_AssignRole",
         "requestBody": {
           "content": {
             "application/json": {
@@ -746,9 +746,9 @@
         "tags": [
           "IdentityProvider"
         ],
-        "summary": "Remove assigned role",
+        "summary": "Revoke role",
         "description": "Remove the assigned role from the subject. Eventually, the subject ends without roles or scopes unassigned by this operation.\n\nFor example:\n\"User X\" is an \"admin\" of the Subscriptions A, B, C. \n`RevokeRole( \"User X\", { \"admin\", \"Subscription B\"}) `\nleaves the user being an admin of the Subscriptions A and C.",
-        "operationId": "IdentityProvider_RevokeRole",
+        "operationId": "V2_IdentityProvider_RevokeRole",
         "requestBody": {
           "content": {
             "application/json": {
@@ -956,7 +956,7 @@
         ],
         "summary": "Create role",
         "description": "Creates a new custom [Role].\nThe role name must be unique within the scope in which the role is created.\n\n> **Info:**\n> For EPC, name must be unique within the EPC Instance.",
-        "operationId": "Roles_CreateRole",
+        "operationId": "V2_Roles_CreateRole",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1164,7 +1164,7 @@
         ],
         "summary": "Delete role",
         "description": "Delete specified role.",
-        "operationId": "Roles_DeleteRole",
+        "operationId": "V2_Roles_DeleteRole",
         "parameters": [
           {
             "name": "roleName",
@@ -1552,7 +1552,7 @@
           },
           "policyUuid": {
             "type": "string",
-            "description": "Scope of the referenced [policy].\n\ntype: policy_management.v1.Policy"
+            "description": "Scope of the referenced [policy].\n\ntype: policy_management.v2.Policy"
           },
           "siteUuid": {
             "type": "string",
@@ -1562,13 +1562,13 @@
             "type": "string",
             "description": "Scope of the referenced [subscription].\n\ntype: subscription_management.v1.Subscription"
           },
-          "userUuid": {
-            "type": "string",
-            "description": "Scope of the referenced [user].\n\ntype: user_management.v1.User"
-          },
           "tenantUuid": {
             "type": "string",
             "description": "Tenant typically represents an organization unit recognized by ESET.\n\nTenant defines the logical scope of the managed entities. Each managed entity is owned by exactly one tenant, which means its life cycle is inherently dependent on the tenant\u2019s life cycle.\n\ntype: tenant_management.v1.Tenant"
+          },
+          "userUuid": {
+            "type": "string",
+            "description": "Scope of the referenced [user].\n\ntype: user_management.v1.User"
           }
         },
         "description": "[Scope] for a role assignment. Scope narrows down the application of a role.\n\n[Scope]s can be hierarchical, which implies role inheritance.\n\n> **Info:**\n> On the Internet the concept of the scope (for example, [Scope](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview)) can be found under different names:\n>\n> `Condition` from:\n> [REST Resource: roleAssignments](https://developers.google.com/admin-sdk/directory/reference/rest/v1/roleAssignments)\n>\n> `Context` from:\n> [Term Definition: Contextual Role](http://www.unified-am.com/UAM/UAM/guidances/termdefinitions/uam_context-role_B9C4F862.html)"
@@ -1577,8 +1577,9 @@
         "type": "object",
         "properties": {
           "roleName": {
+            "title": "The role name is the identifier of the Role.\nFor example, \"admin\", or \"security.viewer\", or \"2a2b9908-6ea1-4ae2-8e65-a410df84e7d1\"",
             "type": "string",
-            "description": "The role name is the identifier of the Role.\n\nFor example, \"admin\", or \"security.viewer\", or  \"2a2b9908-6ea1-4ae2-8e65-a410df84e7d1\"\n\nRoles are referenced by their names."
+            "description": "Roles are referenced by their names."
           },
           "scopes": {
             "type": "array",

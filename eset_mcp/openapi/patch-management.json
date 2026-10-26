@@ -26,7 +26,7 @@
         ],
         "summary": "List recent application patching details",
         "description": "List the patching details of all application patching attempts performed recently (within the last few days).\n\nThe list might be empty if no application patching has been performed recently.\nStale data (that is, not recent) is removed from the list over the course of several days.",
-        "operationId": "PatchManagement_ListRecentApplicationPatchingDetails",
+        "operationId": "V1_PatchManagement_ListRecentApplicationPatchingDetails",
         "responses": {
           "200": {
             "description": "Successful response.",
@@ -223,7 +223,7 @@
         ],
         "summary": "List device patches",
         "description": "If the same application, package or operating system is unpatched on multiple devices, the collection would contain entities for each device and patch individually.\n\nThe list may be empty if no patches for any device are found.",
-        "operationId": "UnpatchedDevices_ListDevicePatches",
+        "operationId": "V1_UnpatchedDevices_ListDevicePatches",
         "parameters": [
           {
             "name": "deviceUuid",
@@ -497,7 +497,7 @@
         ],
         "summary": "List patching details",
         "description": "History is pruned repeatedly to prevent database flooding. Entries from at least the previous 30 days should be available at any time.",
-        "operationId": "PatchManagement_ListDevicePatchingDetails",
+        "operationId": "V1_PatchManagement_ListDevicePatchingDetails",
         "parameters": [
           {
             "name": "deviceUuid",

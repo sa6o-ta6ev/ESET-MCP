@@ -26,7 +26,7 @@
         ],
         "summary": "List all device groups",
         "description": "Hierarchy can be reconstructed from the returned `device_groups`.",
-        "operationId": "DeviceGroups_ListGroups",
+        "operationId": "V1_DeviceGroups_ListGroups",
         "parameters": [
           {
             "name": "pageSize",
@@ -252,7 +252,7 @@
         ],
         "summary": "List devices in device group",
         "description": "Return the list of devices within a [device group].\n\n> **Info:**\n> The lifecycle of membership and devices are uncorrelated: a device can be a member of many arbitrary groups without a device entity knowing that. This is also supported by the fact that some systems responsible for the device-group membership are autonomous and do not need to update the device state to remember membership.\n>\n> As an independent service without direct visibility of device management's memory, it only operates with a convenient projection of the device state. [CAP theorem](https://en.wikipedia.org/wiki/CAP_theorem) applies here.\n>\n> See:\n> [Distributed data management](https://learn.microsoft.com/en-us/dotnet/architecture/microservices/architect-microservice-container-applications/distributed-data-management)\n>\n> **Info:**\n> Example:\n> [ListGroupMembers response](https://learn.microsoft.com/en-us/connectors/office365groups/#listgroupmembers_response)",
-        "operationId": "DeviceGroups_ListMemberDevices",
+        "operationId": "V1_DeviceGroups_ListMemberDevices",
         "parameters": [
           {
             "name": "groupUuid",
@@ -503,12 +503,40 @@
         ],
         "summary": "List managed devices",
         "description": "List all the managed [device]s.",
-        "operationId": "Devices_ListDevices",
+        "operationId": "V1_Devices_ListDevices",
         "parameters": [
           {
             "name": "displayNames",
             "in": "query",
             "description": "If populated, devices with `display name` exactly matching one of the strings within the list would be present in the response.\n\nIf empty, there is no constraint on `display name` of the result set.\n\nExample: filter [\"Hugo\", \"Boss\"] applied on set [\"John\", \"Boss\", \"Lemon\"] would return devices with display names [\"Boss\"].",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "primaryLocalIpAddresses",
+            "in": "query",
+            "description": "If populated, devices with `primary local ip address` exactly matching one of the strings within the list would be present in the response.\n\nIf empty, there is no constraint on `primary local ip address` of the result set.\n\nSupports both IPv4 and IPv6 addresses.\n\nExample: filter [\"192.168.1.10\", \"10.0.0.5\", \"2001:db8::1\"] applied on set of devices would return only those with matching primary local IP addresses.",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "systemHostnames",
+            "in": "query",
+            "description": "If populated, devices with `system hostname` exactly matching one of the strings within the list would be present in the response.\n\nIf empty, there is no constraint on `system hostname` of the result set.\n\nExample: filter [\"DESKTOP-ABC123\", \"server01\"] applied on set of devices would return only those with matching system hostnames.",
             "required": false,
             "style": "form",
             "explode": true,
@@ -553,7 +581,7 @@
           {
             "name": "pageSize",
             "in": "query",
-            "description": "Limit for pagination purposes.\n\nIf unspecified or 0, default value is 50. The maximum value is 1000; values above 1000 will be coerced to 1000.\n\n> **Info:**\n> For more information, refer to [Paginating Requests in APIs](https://medium.com/@ignaciochiazzo/paginating-requests-in-apis-d4883d4c1c4c)\n>\n> or [Design Patterns: Pagination](https://google.aip.dev/158)",
+            "description": "Limit for pagination purposes.\n\nIf unspecified or 0, the default value is 50. The maximum value is 1000; values above 1000 will be coerced to 1000.\n\n> **Info:**\n> For more information, refer to [Paginating Requests in APIs](https://medium.com/@ignaciochiazzo/paginating-requests-in-apis-d4883d4c1c4c)\n>\n> or [Design Patterns: Pagination](https://google.aip.dev/158)",
             "required": false,
             "style": "form",
             "explode": true,
@@ -774,7 +802,7 @@
         ],
         "summary": "Get device details",
         "description": "Get details of a [device].",
-        "operationId": "Devices_GetDevice",
+        "operationId": "V1_Devices_GetDevice",
         "parameters": [
           {
             "name": "deviceUuid",
@@ -980,6 +1008,246 @@
         ]
       }
     },
+    "/v1/devices/{deviceUuid}/applications": {
+      "get": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "List installed applications",
+        "description": "List the applications installed on a [device].\n\n> **Info:**\n> The result does not necessarily contain all the applications installed on the device. It contains only the applications reported by the device, and the scope of the reported applications is controlled by the [policy] applied to the device.",
+        "operationId": "V1_Devices_ListInstalledApplications",
+        "parameters": [
+          {
+            "name": "deviceUuid",
+            "in": "path",
+            "description": "Reference to the [device] to list installed applications for.\n\ntype: Device",
+            "required": true,
+            "style": "simple",
+            "explode": false,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 0,
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Limit for pagination purposes.\n\nIf unspecified or 0, the default value is 50. The maximum value is 1000; values above 1000 will be coerced to 1000.\n\n> **Info:**\n> For more information, refer to [Paginating Requests in APIs](https://medium.com/@ignaciochiazzo/paginating-requests-in-apis-d4883d4c1c4c)\n>\n> or [Design Patterns: Pagination](https://google.aip.dev/158)",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "maximum": 99999,
+              "minimum": 0,
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "pageToken",
+            "in": "query",
+            "description": "Page token of the current page.\n\nIf not given or \"\", the first page is returned.\n\n> **Info:**\n> For more information, refer to [Paginating Requests in APIs](https://medium.com/@ignaciochiazzo/paginating-requests-in-apis-d4883d4c1c4c)\n>\n> or [Design Patterns: Pagination](https://google.aip.dev/158)",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 0,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1ListInstalledApplicationsResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Response took too long; request cached. Response can be retrieved later using the response-id header.",
+            "headers": {
+              "response-id": {
+                "description": "Unique ID of a pending request. Used to retrieve cached result.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "400": {
+            "description": "One of the errors: 1. Bad or missing authorization. 2. Validation error. Invalid argument provided.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "401": {
+            "description": "Token has expired or is invalid.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "403": {
+            "description": "Access denied. Check permissions.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "404": {
+            "description": "Requested resource not found.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "429": {
+            "description": "Rate limit reached. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "500": {
+            "description": "Internal server failure. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "502": {
+            "description": "Internal server failure. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "503": {
+            "description": "Environment under maintenance. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "504": {
+            "description": "Action took too long; timeout reached",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/v1/devices/{deviceUuid}:move": {
       "post": {
         "tags": [
@@ -987,7 +1255,7 @@
         ],
         "summary": "Move device",
         "description": "Move [Device] under new [Group].\n\nIt is possible to move Groups only in the scope of the same tenant.\nThe assignment of policies is updated according to the new hierarchy.",
-        "operationId": "Devices_MoveDevice",
+        "operationId": "V1_Devices_MoveDevice",
         "parameters": [
           {
             "name": "deviceUuid",
@@ -1211,7 +1479,7 @@
         ],
         "summary": "Rename device",
         "description": "Update the device's display name.\n\nThe device display name is objective; it changes for everyone requesting such a device.",
-        "operationId": "Devices_RenameDevice",
+        "operationId": "V1_Devices_RenameDevice",
         "parameters": [
           {
             "name": "deviceUuid",
@@ -1428,14 +1696,686 @@
         "x-codegen-request-body-name": "body"
       }
     },
+    "/v1/devices/{deviceUuid}:setMasterDevice": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Set master device",
+        "description": "Marks a device as a master device. A master device can be used as the source for creating or cloning other virtual machines.\nOptional, master configuration can be provided when marking the device as a master.",
+        "operationId": "V1_Devices_SetMasterDevice",
+        "parameters": [
+          {
+            "name": "deviceUuid",
+            "in": "path",
+            "description": "Reference to [device] to be mark as a master.\n\ntype: Device",
+            "required": true,
+            "style": "simple",
+            "explode": false,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 0,
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevicesSetMasterDeviceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1SetMasterDeviceResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Response took too long; request cached. Response can be retrieved later using the response-id header.",
+            "headers": {
+              "response-id": {
+                "description": "Unique ID of a pending request. Used to retrieve cached result.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "400": {
+            "description": "One of the errors: 1. Bad or missing authorization. 2. Validation error. Invalid argument provided.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "401": {
+            "description": "Token has expired or is invalid.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "403": {
+            "description": "Access denied. Check permissions.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "404": {
+            "description": "Requested resource not found.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "429": {
+            "description": "Rate limit reached. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "500": {
+            "description": "Internal server failure. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "502": {
+            "description": "Internal server failure. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "503": {
+            "description": "Environment under maintenance. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "504": {
+            "description": "Action took too long; timeout reached",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "x-codegen-request-body-name": "body"
+      }
+    },
+    "/v1/devices/{deviceUuid}:unsetMasterDevice": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Unset master device",
+        "description": "Unmark a device as a master device. Existing clones are not affected, this only prevents the creation of new clones.",
+        "operationId": "V1_Devices_UnsetMasterDevice",
+        "parameters": [
+          {
+            "name": "deviceUuid",
+            "in": "path",
+            "description": "Reference to [device].\n\ntype: Device",
+            "required": true,
+            "style": "simple",
+            "explode": false,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 0,
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevicesUnsetMasterDeviceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1UnsetMasterDeviceResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Response took too long; request cached. Response can be retrieved later using the response-id header.",
+            "headers": {
+              "response-id": {
+                "description": "Unique ID of a pending request. Used to retrieve cached result.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "400": {
+            "description": "One of the errors: 1. Bad or missing authorization. 2. Validation error. Invalid argument provided.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "401": {
+            "description": "Token has expired or is invalid.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "403": {
+            "description": "Access denied. Check permissions.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "404": {
+            "description": "Requested resource not found.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "429": {
+            "description": "Rate limit reached. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "500": {
+            "description": "Internal server failure. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "502": {
+            "description": "Internal server failure. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "503": {
+            "description": "Environment under maintenance. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "504": {
+            "description": "Action took too long; timeout reached",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "x-codegen-request-body-name": "body"
+      }
+    },
+    "/v1/devices/{deviceUuid}:updateDescription": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "Update device description",
+        "description": "Update the description of a [device].",
+        "operationId": "V1_Devices_UpdateDeviceDescription",
+        "parameters": [
+          {
+            "name": "deviceUuid",
+            "in": "path",
+            "description": "Reference to the device for which the description is changed.\n\ntype: Device",
+            "required": true,
+            "style": "simple",
+            "explode": false,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 0,
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevicesUpdateDeviceDescriptionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1UpdateDeviceDescriptionResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Response took too long; request cached. Response can be retrieved later using the response-id header.",
+            "headers": {
+              "response-id": {
+                "description": "Unique ID of a pending request. Used to retrieve cached result.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "400": {
+            "description": "One of the errors: 1. Bad or missing authorization. 2. Validation error. Invalid argument provided.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "401": {
+            "description": "Token has expired or is invalid.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "403": {
+            "description": "Access denied. Check permissions.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "404": {
+            "description": "Requested resource not found.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "429": {
+            "description": "Rate limit reached. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "500": {
+            "description": "Internal server failure. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "502": {
+            "description": "Internal server failure. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "503": {
+            "description": "Environment under maintenance. Try again later.",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          },
+          "504": {
+            "description": "Action took too long; timeout reached",
+            "headers": {
+              "request-id": {
+                "description": "Unique ID of the request. Include in support requests.",
+                "style": "simple",
+                "explode": false,
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
+            "content": {}
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "x-codegen-request-body-name": "body"
+      }
+    },
     "/v1/devices:batchGet": {
       "get": {
         "tags": [
           "Devices"
         ],
-        "summary": "Get batch of devices",
+        "summary": "Batch get devices",
         "description": "Retrieves a specific set of devices at a consistent time point.\n\n> **Info:**\n> Modeled after [Batch methods: Get](https://google.aip.dev/231)",
-        "operationId": "Devices_BatchGetDevices",
+        "operationId": "V1_Devices_BatchGetDevices",
         "parameters": [
           {
             "name": "devicesUuids",
@@ -1648,7 +2588,7 @@
         ],
         "summary": "Import device batch",
         "description": "Import a batch of devices into device management. Imported devices cannot be managed until properly enrolled. \n\nThe size of the batch is limited to 1000 devices. If this limit is exceeded, OUT_OF_RANGE (gRPC) | 400 Bad Request (HTTP) is returned.\n\n> **Warning:**\n> Only devices imported with `is mobile` flag == `true` are suitable for Mobile Device Management scenarios.\n\nThe method can fail atomically with:\n- PERMISSION_DENIED (gRPC) | 403 Forbidden (HTTP) if the caller does not have rights for the specified group.\n- INVALID_ARGUMENT (gRPC) | 400 Bad Request (HTTP) if provided device `display names` are not mutually unique within the request.\n- DEADLINE_EXCEEDED (gRPC) | 504 Gateway Timeout (HTTP) if the batch cannot be processed within the time limit of one call.\n\nThe method can fail partially. In such a case, OK (gRPC) | 200 OK (HTTP) is returned, and the response contains a list of errors for every device where an error occurred during enrollment. Possible errors are:\n- INVALID_ARGUMENT (gRPC) if the attributes of the enrolled device are not valid. Also, this error is raised for every imported device where the `parent group` attribute is not empty and does not match the `parent group` from the request.\nFailed devices are identified by the display names from the request (they do not have other unique identifiers yet).\n\nErrors are accompanied by an error message in plain English.\n\n> **Note:**\n> Method parameters follow the semantics of [Batch methods: Create](https://google.aip.dev/233)",
-        "operationId": "Devices_ImportDeviceBatch",
+        "operationId": "V1_Devices_ImportDeviceBatch",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1870,18 +2810,38 @@
           }
         }
       },
+      "DevicesSetMasterDeviceBody": {
+        "type": "object",
+        "properties": {
+          "cloningConfiguration": {
+            "$ref": "#/components/schemas/v1CloningConfiguration"
+          }
+        }
+      },
+      "DevicesUnsetMasterDeviceBody": {
+        "type": "object"
+      },
+      "DevicesUpdateDeviceDescriptionBody": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "New description for the device."
+          }
+        }
+      },
       "protobufAny": {
         "type": "object",
         "properties": {
           "@type": {
             "type": "string",
-            "description": "A URL/resource name that uniquely identifies the type of the serialized\nprotocol buffer message. This string must contain at least\none \"/\" character. The last segment of the URL's path must represent\nthe fully qualified name of the type (as in\n`path/google.protobuf.Duration`). The name should be in a canonical form\n(e.g., leading \".\" is not accepted).\n\nIn practice, teams usually precompile into the binary all types that they\nexpect it to use in the context of Any. However, for URLs which use the\nscheme `http`, `https`, or no scheme, one can optionally set up a type\nserver that maps type URLs to message definitions as follows:\n\n* If no scheme is provided, `https` is assumed.\n* An HTTP GET on the URL must yield a [google.protobuf.Type][]\n  value in binary format, or produce an error.\n* Applications are allowed to cache lookup results based on the\n  URL, or have them precompiled into a binary to avoid any\n  lookup. Therefore, binary compatibility needs to be preserved\n  on changes to types. (Use versioned type names to manage\n  breaking changes.)\n\nNote: this functionality is not currently available in the official\nprotobuf release, and it is not used for type URLs beginning with\ntype.googleapis.com. As of May 2023, there are no widely used type server\nimplementations and no plans to implement one.\n\nSchemes other than `http`, `https` (or the empty scheme) might be\nused with implementation specific semantics."
+            "description": "Identifies the type of the serialized Protobuf message with a URI reference\nconsisting of a prefix ending in a slash and the fully-qualified type name.\n\nExample: type.googleapis.com/google.protobuf.StringValue\n\nThis string must contain at least one `/` character, and the content after\nthe last `/` must be the fully-qualified name of the type in canonical\nform, without a leading dot. Do not write a scheme on these URI references\nso that clients do not attempt to contact them.\n\nThe prefix is arbitrary and Protobuf implementations are expected to\nsimply strip off everything up to and including the last `/` to identify\nthe type. `type.googleapis.com/` is a common default prefix that some\nlegacy implementations require. This prefix does not indicate the origin of\nthe type, and URIs containing it are not expected to respond to any\nrequests.\n\nAll type URL strings must be legal URI references with the additional\nrestriction (for the text format) that the content of the reference\nmust consist only of alphanumeric characters, percent-encoded escapes, and\ncharacters in the following set (not including the outer backticks):\n`/-.~_!$&()*+,;=`. Despite our allowing percent encodings, implementations\nshould not unescape them to prevent confusion with existing parsers. For\nexample, `type.googleapis.com%2FFoo` should be rejected.\n\nIn the original design of `Any`, the possibility of launching a type\nresolution service at these type URLs was considered but Protobuf never\nimplemented one and considers contacting these URLs to be problematic and\na potential security issue. Do not attempt to contact type URLs."
           }
         },
         "additionalProperties": {
           "type": "object"
         },
-        "description": "`Any` contains an arbitrary serialized protocol buffer message along with a\nURL that describes the type of the serialized message.\n\nProtobuf library provides support to pack/unpack Any values in the form\nof utility functions or additional generated methods of the Any type.\n\nExample 1: Pack and unpack a message in C++.\n\n    Foo foo = ...;\n    Any any;\n    any.PackFrom(foo);\n    ...\n    if (any.UnpackTo(&foo)) {\n      ...\n    }\n\nExample 2: Pack and unpack a message in Java.\n\n    Foo foo = ...;\n    Any any = Any.pack(foo);\n    ...\n    if (any.is(Foo.class)) {\n      foo = any.unpack(Foo.class);\n    }\n    // or ...\n    if (any.isSameTypeAs(Foo.getDefaultInstance())) {\n      foo = any.unpack(Foo.getDefaultInstance());\n    }\n\n Example 3: Pack and unpack a message in Python.\n\n    foo = Foo(...)\n    any = Any()\n    any.Pack(foo)\n    ...\n    if any.Is(Foo.DESCRIPTOR):\n      any.Unpack(foo)\n      ...\n\n Example 4: Pack and unpack a message in Go\n\n     foo := &pb.Foo{...}\n     any, err := anypb.New(foo)\n     if err != nil {\n       ...\n     }\n     ...\n     foo := &pb.Foo{}\n     if err := any.UnmarshalTo(foo); err != nil {\n       ...\n     }\n\nThe pack methods provided by protobuf library will by default use\n'type.googleapis.com/full.type.name' as the type URL and the unpack\nmethods only use the fully qualified type name after the last '/'\nin the type URL, for example \"foo.bar.com/x/y.z\" will yield type\nname \"y.z\".\n\nJSON\n====\nThe JSON representation of an `Any` value uses the regular\nrepresentation of the deserialized, embedded message, with an\nadditional field `@type` which contains the type URL. Example:\n\n    package google.profile;\n    message Person {\n      string first_name = 1;\n      string last_name = 2;\n    }\n\n    {\n      \"@type\": \"type.googleapis.com/google.profile.Person\",\n      \"firstName\": <string>,\n      \"lastName\": <string>\n    }\n\nIf the embedded message type is well-known and has a custom JSON\nrepresentation, that representation will be embedded adding a field\n`value` which holds the custom JSON in addition to the `@type`\nfield. Example (for message [google.protobuf.Duration][]):\n\n    {\n      \"@type\": \"type.googleapis.com/google.protobuf.Duration\",\n      \"value\": \"1.212s\"\n    }"
+        "description": "`Any` contains an arbitrary serialized protocol buffer message along with a\nURL that describes the type of the serialized message.\n\nIn its binary encoding, an `Any` is an ordinary message; but in other wire\nforms like JSON, it has a special encoding. The format of the type URL is\ndescribed on the `type_url` field.\n\nProtobuf APIs provide utilities to interact with `Any` values:\n\n- A 'pack' operation accepts a message and constructs a generic `Any` wrapper\n  around it.\n- An 'unpack' operation reads the content of an `Any` message, either into an\n  existing message or a new one. Unpack operations must check the type of the\n  value they unpack against the declared `type_url`.\n- An 'is' operation decides whether an `Any` contains a message of the given\n  type, i.e. whether it can 'unpack' that type.\n\nThe JSON format representation of an `Any` follows one of these cases:\n\n- For types without special-cased JSON encodings, the JSON format\n  representation of the `Any` is the same as that of the message, with an\n  additional `@type` field which contains the type URL.\n- For types with special-cased JSON encodings (typically called 'well-known'\n  types, listed in https://protobuf.dev/programming-guides/json/#any), the\n  JSON format representation has a key `@type` which contains the type URL\n  and a key `value` which contains the JSON-serialized value.\n\nThe text format representation of an `Any` is like a message with one field\nwhose name is the type URL in brackets. For example, an `Any` containing a\n`foo.Bar` message may be written `[type.googleapis.com/foo.Bar] { a: 2 }`."
       },
       "rpcStatus": {
         "type": "object",
@@ -1946,12 +2906,12 @@
           },
           "id": {
             "type": "integer",
-            "description": "Identifier of the governed resource. Can be seen as a [value of item in enumerated type](https://protobuf.dev/programming-guides/proto3/#enum).\n\nIt can be derived from the name by some algorithm, such as CRC32.",
+            "description": "Identifier of the governed resource. It can be seen as the [value of the item in enumerated type](https://protobuf.dev/programming-guides/proto3/#enum).\n\nIt can be derived from the name by some algorithm, such as CRC32.",
             "format": "int64"
           },
           "name": {
             "type": "string",
-            "description": "Name of the governed item. Can be seen as a name of an enumeration item, with `id` being its numerical value.\n\n> **Note:**\n> Not to be confused with `display_name`, which is [purposed for UI](https://google.aip.dev/148)."
+            "description": "Name of the governed item. It can be seen as the name of the enumeration item, with `id` being its numerical value.\n\n> **Note:**\n> Not to be confused with `display_name`, which is [purposed for UI](https://google.aip.dev/148)."
           }
         },
         "description": "A product activated on device.\n\nFor example ESET Mobile Security product is activated on device."
@@ -2034,6 +2994,9 @@
               "$ref": "#/components/schemas/v1ActiveDeviceProduct"
             }
           },
+          "cloningConfiguration": {
+            "$ref": "#/components/schemas/v1CloningConfiguration"
+          },
           "deployedComponents": {
             "type": "array",
             "description": "List of [platform component]s deployed on the [device].\n\nComponents might be installed, but it is not necessary (for example, for plugins or extensions).",
@@ -2049,14 +3012,15 @@
           "deviceToken": {
             "title": "Identity token for the device",
             "type": "string",
+            "description": "[] migrate to IDV\n[] change this to full fledged itentity",
             "readOnly": true
           },
           "deviceType": {
             "$ref": "#/components/schemas/v1DeviceType"
           },
           "displayName": {
-            "title": "Name given by the user to identify the device",
-            "type": "string"
+            "type": "string",
+            "description": "Name given by the user to identify the device."
           },
           "enrollmentStatus": {
             "$ref": "#/components/schemas/v1DeviceEnrollmentStatus"
@@ -2102,16 +3066,12 @@
             "type": "string",
             "description": "It provides affiliation mapping between devices and the accounts they belong to, regardless of the originating system (ESMC, EPC, ECA, Home...). \nIt enables tenant binding, ensuring that each device is correctly associated.\n\n> **Note:**\n> Domain does not scope uniqueness of hardware identifiers. They are still globally unique. Domain helps the clustering algorithm to better determine the right identity by limiting the scope of possibilities.\n>\n> Feedback commands ([i-ecp] Report Hardware Identity Crisis and [i-ecp] Report Hardware Identity Collision) improve detection within the domain."
           },
-          "cloningConfiguration": {
-            "$ref": "#/components/schemas/v1CloningConfiguration"
-          },
           "operatingSystem": {
             "$ref": "#/components/schemas/v1OperatingSystem"
           },
           "originalDisplayName": {
             "type": "string",
-            "description": "The original display name shows the name of the device as it was originally retrieved from the source (for example, operating system).\n\nThis name is likely used in the device directory (for example, Active Directory), and it is useful in support scenarios.\n\nExample: \"BTS9955454\" (such a name would likely get renamed by a user to something more friendly).",
-            "readOnly": true
+            "description": "The original display name shows the name of the device as it was originally retrieved from the source (for example, operating system).\n\nThis name is likely used in the device directory (for example, Active Directory), and it is useful in support scenarios.\n\nExample: \"BTS9955454\" (such a name would likely get renamed by a user to something more friendly)."
           },
           "parentGroupUuid": {
             "type": "string",
@@ -2119,11 +3079,15 @@
           },
           "primaryLocalIpAddress": {
             "type": "string",
-            "description": "Primary IP address of the endpoint retrieved from all available Ethernet interfaces on the device. \n\nThe process for determining this IP address differs based on the operating system in two steps:\n\n1. Enumeration of all Ethernet interfaces and their associated IP addresses by using:\n- **Android**: [NetworkInterface.getNetworkInterfaces()](https://developer.android.com/reference/java/net/NetworkInterface#getNetworkInterfaces()) method from the Android API.\n- **Apple macOS**: [IOServiceMatching](https://developer.apple.com/documentation/iokit/1514687-ioservicematching) function provided by the macOS I/O Kit framework.\n- **Linux**: [getifaddrs()](https://man7.org/linux/man-pages/man3/getifaddrs.3.html) system call.\n- **Microsoft Windows**: [GetAdaptersInfo()](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getadaptersinfo) function from the IP Helper API.\nThe Ethernet interfaces and their associated IP addresses are ordered based on the operating system's internal logic.\n\n2. Selection of the primary local IP address from the list of Ethernet interfaces:\n- among all Ethernet interfaces, IPv4 addresses are prioritized. The first IPv4 address encountered across all Ethernet interfaces is selected as the `primary_local_ip_address`.\n- if no Ethernet interface has an IPv4 address, the first available IPv6 address from the list is selected instead.\n\n> **Info**:\n> For **Apple iOS** the `primary_local_ip_address` is not available.\n\nThis attribute serves as the primary local IP address that represents the endpoint within its local network."
+            "description": "Primary IP address of the endpoint retrieved from all available Ethernet interfaces on the device. \n\nThe value can be either an IPv4 address as defined in [RFC 791](https://datatracker.ietf.org/doc/html/rfc791) (IANA Internet Protocol) or an IPv6 address as defined in [RFC 8200](https://datatracker.ietf.org/doc/html/rfc8200) (Internet Protocol, Version 6).\n\nThe process for determining this IP address differs based on the operating system in two steps:\n\n1. Enumeration of all Ethernet interfaces and their associated IP addresses by using:\n- **Android**: [NetworkInterface.getNetworkInterfaces()](https://developer.android.com/reference/java/net/NetworkInterface#getNetworkInterfaces()) method from the Android API.\n- **Apple macOS**: [IOServiceMatching](https://developer.apple.com/documentation/iokit/1514687-ioservicematching) function provided by the macOS I/O Kit framework.\n- **Linux**: [getifaddrs()](https://man7.org/linux/man-pages/man3/getifaddrs.3.html) system call.\n- **Microsoft Windows**: [GetAdaptersInfo()](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getadaptersinfo) function from the IP Helper API.\nThe Ethernet interfaces and their associated IP addresses are ordered based on the operating system's internal logic.\n\n2. Selection of the primary local IP address from the list of Ethernet interfaces:\n- among all Ethernet interfaces, IPv4 addresses are prioritized. The first IPv4 address encountered across all Ethernet interfaces is selected as the `primary_local_ip_address`.\n- if no Ethernet interface has an IPv4 address, the first available IPv6 address from the list is selected instead.\n\n> **Info**:\n> For **Apple iOS** the `primary_local_ip_address` is not available.\n\nExamples: \"192.168.1.10\" (IPv4), \"2001:db8::1\" (IPv6)\n\nThis attribute serves as the primary local IP address that represents the endpoint within its local network."
           },
           "publicIpAddress": {
             "type": "string",
             "description": "The `public_IP_address` represents the public-facing IP address of the endpoint as resolved and identified by the server communicating with the endpoint. This address reflects the endpoint's presence on the wider internet and is often the IP address assigned by the network's NAT (Network Address Translation) or gateway device.\n\nThis attribute is used to uniquely identify the endpoint from the perspective of external servers or services, providing the public IP address that is visible outside the local network."
+          },
+          "systemHostname": {
+            "type": "string",
+            "description": "The hostname of the device as reported by the operating system.\n\nEvery device has exactly one hostname that identifies it within a network. The hostname is retrieved using OS-specific mechanisms:\n\n- **Microsoft Windows**: The hostname (computer name) is maintained by Windows and configured under *System > About > Device name*. Retrieved via [GetComputerNameEx](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getcomputernameexw) with `ComputerNameDnsHostname`, WMI, or the `COMPUTERNAME` environment variable.\n\n- **Linux**: The kernel exposes the hostname via the [gethostname()](https://man7.org/linux/man-pages/man2/gethostname.2.html) syscall. It is typically configured through `/etc/hostname` and managed by `systemd-hostnamed` or similar services.\n\n- **Apple macOS**: macOS maintains several related names (HostName, LocalHostName, ComputerName). This field uses **LocalHostName** retrieved via [SCDynamicStoreCopyLocalHostName()](https://developer.apple.com/documentation/systemconfiguration/1614818-scdynamicstorecopylocalhostname) because it is always available, DNS-compatible, and unique.\n\n- **Android**: A hostname exists, but many devices leave it unset or use generic values for privacy reasons.\n\n- **Apple iOS/iPadOS**: There is a device name (e.g., \"John's iPhone\"), but access to a stable hostname is intentionally restricted for privacy. This field may be empty or contain a generic value.\n\nHostnames follow the rules defined in [RFC 1123](https://datatracker.ietf.org/doc/html/rfc1123#section-2.1), which allows labels to begin with a digit and restricts characters to letters (a-z, A-Z), digits (0-9), and hyphens (-).\n\n> **Info:**\n> For mobile platforms (Android, iOS/iPadOS), the hostname may not be available or meaningful due to privacy restrictions.\n\nExamples: \"DESKTOP-ABC123\", \"server01\", \"MacBook-Pro\", \"My-Mac.local\""
           },
           "tags": {
             "type": "array",
@@ -2135,7 +3099,7 @@
           },
           "uuid": {
             "type": "string",
-            "description": "Unique identifier of the entity.\n\nMust be collision-free - two identifiers created anywhere in the world must not collide within the entity parent scope. Unless a member of aggregate, the entity scope is always global.\n\nAlthough most of the times compliant with [RFC 4122: A Universally Unique IDentifier (UUID) URN Namespace](https://tools.ietf.org/html/rfc4122), do not rely on it being a RFC UUID. Treat it as an opaque identifier.\n\nRFC UUID can be recognized by being formatted according to the template xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx, as explained on [Wikipedia](https://en.wikipedia.org/wiki/Universally_unique_identifier#Format).\n\nUUID is used for referencing an entity, even across domains.\n\nExample: \"123e4567-e89b-12d3-a456-426614174000\""
+            "description": "Unique identifier of the entity.\n\nMust be collision-free - two identifiers created anywhere in the world must not collide within the entity parent scope. Unless a member of aggregate, the entity scope is always global.\n\nAlthough most of the times compliant with [RFC 9562: A Universally Unique IDentifier (UUID) URN Namespace](https://tools.ietf.org/html/rfc9562), do not rely on it being a RFC UUID. Treat it as an opaque identifier, albeit of predictable length and alphabet.\n\nRFC UUID can be recognized by being formatted according to the template xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx, as explained on [Wikipedia](https://en.wikipedia.org/wiki/Universally_unique_identifier#Format).\n\nUUID is used for referencing an entity, even across domains.\n\nExample: \"123e4567-e89b-12d3-a456-426614174000\""
           },
           "etag": {
             "type": "string",
@@ -2189,13 +3153,18 @@
             "title": "Reference to parent [group]",
             "type": "string"
           },
+          "ownerUuid": {
+            "type": "string",
+            "description": "Identifier of the tenant who owns this object.\n\ntype: tenant_management.v1.Tenant"
+          },
           "uuid": {
             "type": "string",
-            "description": "Unique identifier of the entity.\n\nMust be collision-free - two identifiers created anywhere in the world must not collide within the entity parent scope. Unless a member of aggregate, the entity scope is always global.\n\nAlthough most of the times compliant with [RFC 4122: A Universally Unique IDentifier (UUID) URN Namespace](https://tools.ietf.org/html/rfc4122), do not rely on it being a RFC UUID. Treat it as an opaque identifier.\n\nRFC UUID can be recognized by being formatted according to the template xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx, as explained on [Wikipedia](https://en.wikipedia.org/wiki/Universally_unique_identifier#Format).\n\nUUID is used for referencing an entity, even across domains.\n\nExample: \"123e4567-e89b-12d3-a456-426614174000\""
+            "description": "Unique identifier of the entity.\n\nMust be collision-free - two identifiers created anywhere in the world must not collide within the entity parent scope. Unless a member of aggregate, the entity scope is always global.\n\nAlthough most of the times compliant with [RFC 9562: A Universally Unique IDentifier (UUID) URN Namespace](https://tools.ietf.org/html/rfc9562), do not rely on it being a RFC UUID. Treat it as an opaque identifier, albeit of predictable length and alphabet.\n\nRFC UUID can be recognized by being formatted according to the template xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx, as explained on [Wikipedia](https://en.wikipedia.org/wiki/Universally_unique_identifier#Format).\n\nUUID is used for referencing an entity, even across domains.\n\nExample: \"123e4567-e89b-12d3-a456-426614174000\""
           },
           "etag": {
             "type": "string",
-            "description": "The entity tag (or ETag) can be thought of as a snapshot of a resource\u2019s state at a given revision and can used for optimistic concurrency control and validating entity freshness.  It is computed by the server based on the value of other fields, and may be sent on update and delete requests to ensure the client has an up-to-date value before proceeding.\n\nAn entity-tag consists of an opaque quoted string (hash or checksum), possibly prefixed by a weakness indicator as specified in [RFC2616, Section 13.3.3](https://datatracker.ietf.org/doc/html/rfc2616#section-13.3.3)\neTag value must follow [RFC7232, Section 2.3](https://datatracker.ietf.org/doc/html/rfc7232#section-2.3) and [google's specification](https://google.aip.dev/154).\n\n> **Info:**\n> eTag can be used as a complementary to mechanism to revisioning, where:\n> - Revisions for tracking history and allowing access to previous versions [google's AIP 162](https://google.aip.dev/162)\n> - ETags for concurrency control and validating freshness [google's AIP 154](https://google.aip.dev/154)\n>\n> The same resource may expose `revision_id` that clients can list or roll back to past snapshots and also eTag, which\n> - serve as a practical implementation of revisions for managing resource versions in real-time operations.\n> - ensure that clients operate on the expected version of a resource, preventing conflicts in concurrent scenarios (e.g., two clients trying to update the same resource simultaneously).\n> In contrast to revisions ETags don\u2019t provide a full revision history (like a version control system). However, they enable safe updates and deletes by tying each operation to a specific resource state\u2014effectively a revision."
+            "description": "The entity tag (or ETag) can be thought of as a snapshot of a resource\u2019s state at a given revision and can used for optimistic concurrency control and validating entity freshness.  It is computed by the server based on the value of other fields, and may be sent on update and delete requests to ensure the client has an up-to-date value before proceeding.\n\nAn entity-tag consists of an opaque quoted string (hash or checksum), possibly prefixed by a weakness indicator as specified in [RFC2616, Section 13.3.3](https://datatracker.ietf.org/doc/html/rfc2616#section-13.3.3)\neTag value must follow [RFC7232, Section 2.3](https://datatracker.ietf.org/doc/html/rfc7232#section-2.3) and [google's specification](https://google.aip.dev/154).\n\n> **Info:**\n> eTag can be used as a complementary to mechanism to revisioning, where:\n> - Revisions for tracking history and allowing access to previous versions [google's AIP 162](https://google.aip.dev/162)\n> - ETags for concurrency control and validating freshness [google's AIP 154](https://google.aip.dev/154)\n>\n> The same resource may expose `revision_id` that clients can list or roll back to past snapshots and also eTag, which\n> - serve as a practical implementation of revisions for managing resource versions in real-time operations.\n> - ensure that clients operate on the expected version of a resource, preventing conflicts in concurrent scenarios (e.g., two clients trying to update the same resource simultaneously).\n> In contrast to revisions ETags don\u2019t provide a full revision history (like a version control system). However, they enable safe updates and deletes by tying each operation to a specific resource state\u2014effectively a revision.",
+            "readOnly": true
           }
         },
         "description": "> **Migration from EPC:**\n> Static groups have `is_security_group` == `true`\n> Dynamic groups have `is_security_group` == `false`\n>\n> `All` and `Lost&Found` are just ordinary groups."
@@ -2377,6 +3346,27 @@
           }
         }
       },
+      "v1InstalledApplication": {
+        "type": "object",
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "description": "Human friendly name of the application."
+          },
+          "publisherDisplayName": {
+            "type": "string",
+            "description": "Human friendly name of application's publisher."
+          },
+          "version": {
+            "$ref": "#/components/schemas/v1Version"
+          },
+          "uuid": {
+            "type": "string",
+            "description": "Unique identifier of the entity.\n\nMust be collision-free - two identifiers created anywhere in the world must not collide within the entity parent scope. Unless a member of aggregate, the entity scope is always global.\n\nAlthough most of the times compliant with [RFC 9562: A Universally Unique IDentifier (UUID) URN Namespace](https://tools.ietf.org/html/rfc9562), do not rely on it being a RFC UUID. Treat it as an opaque identifier, albeit of predictable length and alphabet.\n\nRFC UUID can be recognized by being formatted according to the template xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx, as explained on [Wikipedia](https://en.wikipedia.org/wiki/Universally_unique_identifier#Format).\n\nUUID is used for referencing an entity, even across domains.\n\nExample: \"123e4567-e89b-12d3-a456-426614174000\""
+          }
+        },
+        "description": "Descriptor of an application installed on a [device].\n\nIt describes a concrete installation reported by a particular device, including its version. The set of reported applications is controlled by the [policy] applied to the device, so it does not necessarily cover all the applications installed on the device."
+      },
       "v1ListDevicesResponse": {
         "type": "object",
         "properties": {
@@ -2401,6 +3391,22 @@
             "description": "List of [device group]s.",
             "items": {
               "$ref": "#/components/schemas/v1DeviceGroup"
+            }
+          },
+          "nextPageToken": {
+            "type": "string",
+            "description": "Page token of the next page.\n\nEmpty or \"\" for the last page.\n\n> **Info:**\n> For more information, refer to [Paginating Requests in APIs](https://medium.com/@ignaciochiazzo/paginating-requests-in-apis-d4883d4c1c4c)\n>\n> or [Design Patterns: Pagination](https://google.aip.dev/158)"
+          }
+        }
+      },
+      "v1ListInstalledApplicationsResponse": {
+        "type": "object",
+        "properties": {
+          "applications": {
+            "type": "array",
+            "description": "List of installed applications reported by the [device].\n\nThis is not necessarily the complete set of applications installed on the device - the scope of the reported applications is controlled by the [policy] applied to the device.",
+            "items": {
+              "$ref": "#/components/schemas/v1InstalledApplication"
             }
           },
           "nextPageToken": {
@@ -2443,7 +3449,7 @@
           },
           "uuid": {
             "type": "string",
-            "description": "Unique identifier of the entity.\n\nMust be collision-free - two identifiers created anywhere in the world must not collide within the entity parent scope. Unless a member of aggregate, the entity scope is always global.\n\nAlthough most of the times compliant with [RFC 4122: A Universally Unique IDentifier (UUID) URN Namespace](https://tools.ietf.org/html/rfc4122), do not rely on it being a RFC UUID. Treat it as an opaque identifier.\n\nRFC UUID can be recognized by being formatted according to the template xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx, as explained on [Wikipedia](https://en.wikipedia.org/wiki/Universally_unique_identifier#Format).\n\nUUID is used for referencing an entity, even across domains.\n\nExample: \"123e4567-e89b-12d3-a456-426614174000\""
+            "description": "Unique identifier of the entity.\n\nMust be collision-free - two identifiers created anywhere in the world must not collide within the entity parent scope. Unless a member of aggregate, the entity scope is always global.\n\nAlthough most of the times compliant with [RFC 9562: A Universally Unique IDentifier (UUID) URN Namespace](https://tools.ietf.org/html/rfc9562), do not rely on it being a RFC UUID. Treat it as an opaque identifier, albeit of predictable length and alphabet.\n\nRFC UUID can be recognized by being formatted according to the template xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx, as explained on [Wikipedia](https://en.wikipedia.org/wiki/Universally_unique_identifier#Format).\n\nUUID is used for referencing an entity, even across domains.\n\nExample: \"123e4567-e89b-12d3-a456-426614174000\""
           }
         },
         "description": "Descriptor of a device group member - a device.\n\n> **Info:**\n> `Groups` is an independent microservice from `Devices`, which implies separate storage. Changes in Device must be replicated into MemberDevices of the same identifier.\n>\n> For more information, refer to:\n> - [Distributed data management](https://learn.microsoft.com/en-us/dotnet/architecture/microservices/architect-microservice-container-applications/distributed-data-management)\n> - [Join data among microservices](https://medium.com/creditorwatch/join-data-among-microservices-1cda360c6c1c)"
@@ -2517,12 +3523,12 @@
           },
           "id": {
             "type": "integer",
-            "description": "Identifier of the governed resource. Can be seen as a [value of item in enumerated type](https://protobuf.dev/programming-guides/proto3/#enum).\n\nIt can be derived from the name by some algorithm, such as CRC32.",
+            "description": "Identifier of the governed resource. It can be seen as the [value of the item in enumerated type](https://protobuf.dev/programming-guides/proto3/#enum).\n\nIt can be derived from the name by some algorithm, such as CRC32.",
             "format": "int64"
           },
           "name": {
             "type": "string",
-            "description": "Name of the governed item. Can be seen as a name of an enumeration item, with `id` being its numerical value.\n\n> **Note:**\n> Not to be confused with `display_name`, which is [purposed for UI](https://cloud.google.com/apis/design/standard_fields)."
+            "description": "Name of the governed item. It can be seen as the name of the enumeration item, with `id` being its numerical value.\n\n> **Note:**\n> Not to be confused with `display_name`, which is [purposed for UI](https://google.aip.dev/148)."
           }
         },
         "description": "Descriptor of platform component with version.\n\n> **Info:**\n> Should we track modules, they will be here."
@@ -2556,6 +3562,22 @@
         "description": "Descriptor of CPU."
       },
       "v1RenameDeviceResponse": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/v1Device"
+          }
+        }
+      },
+      "v1SetMasterDeviceResponse": {
+        "title": "empty",
+        "type": "object"
+      },
+      "v1UnsetMasterDeviceResponse": {
+        "title": "empty",
+        "type": "object"
+      },
+      "v1UpdateDeviceDescriptionResponse": {
         "type": "object",
         "properties": {
           "device": {

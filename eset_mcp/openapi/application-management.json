@@ -23,7 +23,7 @@
         ],
         "summary": "List executables",
         "description": "List all the executables.",
-        "operationId": "Executables_ListExecutables",
+        "operationId": "V1_Executables_ListExecutables",
         "parameters": [
           {
             "name": "pageSize",
@@ -249,7 +249,7 @@
         ],
         "summary": "Get executable",
         "description": "Get details of a specific executable.",
-        "operationId": "Executables_GetExecutable",
+        "operationId": "V1_Executables_GetExecutable",
         "parameters": [
           {
             "name": "executableUuid",
@@ -462,7 +462,7 @@
         ],
         "summary": "Block executable",
         "description": "Blocked executables will not be executed.\n\nIdempotent",
-        "operationId": "Executables_BlockExecutable",
+        "operationId": "V1_Executables_BlockExecutable",
         "parameters": [
           {
             "name": "executableUuid",
@@ -686,7 +686,7 @@
         ],
         "summary": "Unblock executable",
         "description": "Unblock a file to be executable again.\n\nIdempotent",
-        "operationId": "Executables_UnblockExecutable",
+        "operationId": "V1_Executables_UnblockExecutable",
         "parameters": [
           {
             "name": "executableUuid",

@@ -23,7 +23,7 @@
         ],
         "summary": "List users",
         "description": "Retrieves a list of users, optionally filtered by certain criteria defined in the user filter.",
-        "operationId": "Users_ListUsers",
+        "operationId": "V1_Users_ListUsers",
         "parameters": [
           {
             "name": "activeProduct.autoActivated",
@@ -433,7 +433,7 @@
         ],
         "summary": "Get user",
         "description": "Retrieves the details of a specific user based on their unique identifier.",
-        "operationId": "Users_GetUser",
+        "operationId": "V1_Users_GetUser",
         "parameters": [
           {
             "name": "userUuid",
@@ -646,7 +646,7 @@
         ],
         "summary": "Batch get users",
         "description": "Retrieves a specific set of [user]s at some point in time.\n\nThe size of the batch is limited to 1000 users. If this limit is exceeded, OUT_OF_RANGE (gRPC) | 400 Bad Request (HTTP) is returned.",
-        "operationId": "Users_BatchGetUsers",
+        "operationId": "V1_Users_BatchGetUsers",
         "requestBody": {
           "content": {
             "application/json": {

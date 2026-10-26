@@ -22,7 +22,7 @@
           "WebAddressRulesConfigurator"
         ],
         "summary": "List all address rules containing given domain",
-        "operationId": "WebAddressRulesConfigurator_ListWebAddressRules",
+        "operationId": "V2_WebAddressRulesConfigurator_ListWebAddressRules",
         "parameters": [
           {
             "name": "policyUuid",
@@ -248,7 +248,7 @@
         ],
         "summary": "Update web address rule domains",
         "description": "Update all domains inside the web address rule. If the web address rule is empty, it will set the specified vector of domains; otherwise, it will replace all domains inside the web address rule. Original domains that were part of the web address rule will be replaced by the list of new ones. \nOnly domain parts of URLs are extracted and imported.\n\nAll domains are imported once. Multiple URLs sharing the domain part are imported once. Repeated addition of the same domain adds nothing to `added_domains_count`.\n\n> **Warning:**\n> Even if a single element is added, the whole policy MUST BE validated.",
-        "operationId": "WebAddressRulesConfigurator_UpdateWebAddressRuleDomains",
+        "operationId": "V2_WebAddressRulesConfigurator_UpdateWebAddressRuleDomains",
         "parameters": [
           {
             "name": "policyUuid",

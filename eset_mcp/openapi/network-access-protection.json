@@ -23,7 +23,7 @@
         ],
         "summary": "List IP sets",
         "description": "List all IP sets.",
-        "operationId": "NetworkAccessConfigurator_ListIpSets",
+        "operationId": "V1_NetworkAccessConfigurator_ListIpSets",
         "parameters": [
           {
             "name": "policyUuid",
@@ -256,14 +256,14 @@
         ]
       }
     },
-    "/v1/policies/{policyUuid}/ip-sets/{ipSetUuid}:update": {
+    "/v1/policies/{policyUuid}/ip-sets/{ipSet.uuid}:update": {
       "post": {
         "tags": [
           "NetworkAccessConfigurator"
         ],
         "summary": "Update IP set",
         "description": "Update the selected IP set; attributes that can be updated:\n- display_name\n- description\n- ip_addresses\n\nIf IP addresses are updated, there is no check for uniqueness, which means that one IP address can appear multiple times inside the IP set.\n\nRead-only IP sets cannot be updated.\nFor built-in IP sets, only the ip_addresses attribute can be updated.",
-        "operationId": "NetworkAccessConfigurator_UpdateIpSet",
+        "operationId": "V1_NetworkAccessConfigurator_UpdateIpSet",
         "parameters": [
           {
             "name": "policyUuid",
@@ -280,7 +280,7 @@
             }
           },
           {
-            "name": "ipSetUuid",
+            "name": "ipSet.uuid",
             "in": "path",
             "description": "Unique identifier of the entity.\n\nMust be collision-free - two identifiers created anywhere in the world must not collide within entity parent scope. Unless a member of aggregate, the entity scope is always global.\n\nAlthough most of the times compliant with [RFC 4122: A Universally Unique IDentifier (UUID) URN Namespace](https://tools.ietf.org/html/rfc4122), do not rely on it being a RFC UUID. Treat it as an opaque identifier.\n\nRFC UUID can be recognized by being formatted according to the template xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx, as explained on [Wikipedia](https://en.wikipedia.org/wiki/Universally_unique_identifier#Format).\n\nUUID is used for referencing an entity, even across domains.\n\nExample: \"123e4567-e89b-12d3-a456-426614174000\"",
             "required": true,
@@ -501,7 +501,7 @@
         ],
         "summary": "Get IP set",
         "description": "Get details about an IP set.",
-        "operationId": "NetworkAccessConfigurator_GetIpSet",
+        "operationId": "V1_NetworkAccessConfigurator_GetIpSet",
         "parameters": [
           {
             "name": "policyUuid",

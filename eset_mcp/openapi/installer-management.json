@@ -23,7 +23,7 @@
         ],
         "summary": "Generate gpo sccm file",
         "description": "Generates a GPO/SCCM-compatible configuration file for deploying the security product via centralized IT management systems (such as Group Policy or System Center Configuration Manager). \n\n\nThe configuration is generated ad-hoc and not stored in the system.",
-        "operationId": "Installers_GenerateGpoSccmFile",
+        "operationId": "V1_Installers_GenerateGpoSccmFile",
         "requestBody": {
           "content": {
             "application/json": {
@@ -231,7 +231,7 @@
         ],
         "summary": "List installers",
         "description": "List all installers available to the caller.",
-        "operationId": "Installers_ListInstallers",
+        "operationId": "V1_Installers_ListInstallers",
         "parameters": [
           {
             "name": "usable",
@@ -466,7 +466,7 @@
         ],
         "summary": "Create installer",
         "description": "Create [installer].",
-        "operationId": "Installers_CreateInstaller",
+        "operationId": "V1_Installers_CreateInstaller",
         "requestBody": {
           "content": {
             "application/json": {
@@ -674,7 +674,7 @@
         ],
         "summary": "Get installer",
         "description": "Get details of the requested [installer].",
-        "operationId": "Installers_GetInstaller",
+        "operationId": "V1_Installers_GetInstaller",
         "parameters": [
           {
             "name": "installerUuid",
@@ -885,7 +885,7 @@
         ],
         "summary": "Delete installer",
         "description": "Delete [installer].",
-        "operationId": "Installers_DeleteInstaller",
+        "operationId": "V1_Installers_DeleteInstaller",
         "parameters": [
           {
             "name": "installerUuid",

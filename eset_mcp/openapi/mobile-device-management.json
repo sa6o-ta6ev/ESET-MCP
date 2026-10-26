@@ -23,7 +23,7 @@
         ],
         "summary": "Batch activate product",
         "description": "Create a product activation task with mobile devices as its targets.\n\nThe product is picked automatically based on the parent group of a particular device.\n\nThe method can fail atomically with:\n- PERMISSION_DENIED (gRPC) | 403 Forbidden (HTTP) if the caller cannot does not have rights to relevant resources (devices, device tasks and triggers).\n- FAILED_PRECONDITION (gRPC) | 400 Bad Request (HTTP) if \n- the devices on input do not share the same parent [device group] or\n- if there is no such subscription with available product on the parent [device group].\n- NOT_FOUND (gRPC) | 404 Not Found (HTTP) if some of the devices on the input does not exist.",
-        "operationId": "MobileDevices_BatchActivateProduct",
+        "operationId": "V1_MobileDevices_BatchActivateProduct",
         "requestBody": {
           "content": {
             "application/json": {
@@ -231,7 +231,7 @@
         ],
         "summary": "Batch get enrollment links",
         "description": "Get enrollment links for a batch of **mobile** devices in device management. The mobile devices must have `is mobile` flag set to `true`.\n\n>**Warning:**\n> A link only works on Android and iOS operating systems.\n\nThere is no limit on number of enrollment links issued for one device. All of them can be valid at the same time (within limits of their own expiration) until the device gets enrolled.\n\nThe size of the batch is limited to 1000 devices. If this limit is exceeded, INVALID_ARGUMENT (gRPC) | 400 Bad Request (HTTP) is returned.\n\nThe operation fails atomically. If any error occurs, it is returned for the whole batch. The devices are processed in an undetermined order.\n- If some device is already enrolled, the link is not generated, and the error FAILED_PRECONDITION (gRPC) | 400 Bad Request (HTTP) is returned.\n- For a device not marked as `mobile` in the device management (effectively not an iOS or Android device), the link is not generated, and error FAILED_PRECONDITION (gRPC) | 400 Bad Request (HTTP) is returned.\n- For non-existing devices, the error NOT_FOUND (gRPC) | 404 Not Found (HTTP) is returned.",
-        "operationId": "MobileDevices_BatchGetEnrollmentLinks",
+        "operationId": "V1_MobileDevices_BatchGetEnrollmentLinks",
         "requestBody": {
           "content": {
             "application/json": {
