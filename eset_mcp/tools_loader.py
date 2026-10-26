@@ -10,6 +10,7 @@ builds a ToolDef with:
 
 The server is read-only: only GET operations become tools. Write operations
 (POST/PUT/PATCH/DELETE) are never loaded, so they cannot be called at all.
+Operations ESET marks deprecated are skipped too.
 """
 from __future__ import annotations
 
@@ -169,7 +170,7 @@ def _tools_from_spec(service: str, spec: dict[str, Any]) -> list[ToolDef]:
     out: list[ToolDef] = []
     for path, ops in spec.get("paths", {}).items():
         for method, op in ops.items():
-            if method.lower() not in _RO_METHODS:
+            if method.lower() not in _RO_METHODS or is_deprecated(op):
                 continue
             op_id = op.get("operationId") or _fallback_op_id(method, path)
             name = f"{prefix}_{_snake(op_id)}"
@@ -200,6 +201,13 @@ def _tools_from_spec(service: str, spec: dict[str, Any]) -> list[ToolDef]:
                 )
             )
     return out
+
+
+def is_deprecated(op: dict[str, Any]) -> bool:
+    """ESET flags some operations with ``deprecated: true``, others only in the text
+    (e.g. iam "List roles": "@deprecated Use `ListRoleAssignments` instead")."""
+    text = f"{op.get('summary') or ''} {op.get('description') or ''}"
+    return bool(op.get("deprecated")) or "@deprecated" in text
 
 
 def _build_description(method: str, path: str, summary: str, description: str) -> str:

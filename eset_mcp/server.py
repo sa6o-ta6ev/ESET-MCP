@@ -377,7 +377,9 @@ def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
             tool = tools_by_name[name]
             result = await _execute_tool(http, tool, arguments)
         except EsetApiError as e:
-            raise _ToolError(f"ESET API error: {e}", status=str(e.status)) from e
+            hint = _availability_hint(tools_by_name.get(name), e.status)
+            text = f"ESET API error: {e}" + (f"\nLikely cause: {hint}" if hint else "")
+            raise _ToolError(text, status=str(e.status)) from e
 
         if tool.service == "policy-management":
             # The encoded settings blob is thousands of useless tokens to the
@@ -501,6 +503,40 @@ def _tool_to_mcp(t: ToolDef) -> Tool:
     )
 
 
+def _availability_hint(tool: ToolDef | None, status: int) -> str | None:
+    """Explain errors that mean "not available for this tenant" rather than "bad request".
+
+    Seen on a real tenant: 403 on v2 detection groups (permission set), 404 on
+    whole collections such as v2 detections / quarantine / users (module or
+    API version not offered), 501 on EDR rules / exclusions / executables
+    (feature not enabled), 400 on IP sets for non-"Common features" policies.
+    """
+    if tool is None:
+        return None
+    if status == 403:
+        return (
+            f"the API user's permission set has no read access to {tool.service}. Add it under "
+            "Permission sets in ESET PROTECT Hub / ESET Business Account; other tools still work."
+        )
+    if status == 404 and not tool.path_params:
+        return (
+            f"{tool.method} {tool.path} is not available for this tenant - usually the module "
+            "behind it is not licensed/enabled or this API version is not offered (for "
+            "detections use the v1 tools or latest_detections). Retrying will not help."
+        )
+    if status == 501:
+        return (
+            f"{tool.service} {tool.path} is not enabled for this tenant (typically the product "
+            "or licence behind it, e.g. ESET Inspect / EDR for EDR rules). Retrying will not help."
+        )
+    if status == 400 and tool.service == "network-access-protection":
+        return (
+            "network access tools (IP sets) only work on 'Common features' policies "
+            "(product eset.features in the policy list); pick such a policy."
+        )
+    return None
+
+
 def _path_segment(value: Any) -> str:
     """Encode one path parameter so it stays a single URL path segment.
 
@@ -543,9 +579,14 @@ async def _execute_tool(
 
 
 def _to_text(result: Any) -> str:
-    """Render as JSON text - pretty-printed for readability."""
+    """Render as compact JSON.
+
+    Compact on purpose: the byte cap (response_shaping) measures compact JSON,
+    and pretty-printing added ~40% on top - capped responses overshot the cap
+    (141 KB against 100 KB) and cost the agent tokens for whitespace.
+    """
     try:
-        return json.dumps(result, indent=2, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False)
     except (TypeError, ValueError):
         return str(result)
 

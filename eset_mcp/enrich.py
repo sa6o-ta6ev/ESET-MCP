@@ -22,6 +22,7 @@ Rules:
   ...) use the right hash type. 40-char values are real SHA-1 and stay.
 - Protobuf-style durations (``triageDuration: "339664.817892s"``): add
   ``<field>Human`` ("3d 22h 21m").
+- ``tags`` that are ``[""]`` (every device in the tenant): ``[]``.
 - ``description`` with literal ``\\n`` escapes instead of newlines (2 of 6
   incidents): unescape - but only when every backslash in the text belongs
   to such an escape, so Windows paths (``C:\\Users\\nick``) are never touched.
@@ -44,6 +45,9 @@ def enrich(node: Any) -> Any:
         _fix_version(node)
         _fix_capacity(node)
         _fix_hashes(node)
+        tags = node.get("tags")
+        if isinstance(tags, list) and tags and all(t == "" for t in tags):
+            node["tags"] = []
         for key, value in list(node.items()):
             if isinstance(value, str):
                 _fix_string_field(node, key, value)

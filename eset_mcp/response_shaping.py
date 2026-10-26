@@ -25,7 +25,7 @@ from typing import Any
 
 # How many extra bytes we reserve for the `_capped` metadata block so we
 # never overshoot the budget when we attach it.
-_CAPPED_METADATA_OVERHEAD = 512
+_CAPPED_METADATA_OVERHEAD = 1024
 
 # Top-level keys we always keep, even when truncating the items list - they
 # carry pagination + totals so the agent can continue.
@@ -119,15 +119,18 @@ def _truncate_paginated(
     overhead = _byte_len(skeleton) + _CAPPED_METADATA_OVERHEAD
     budget = max(max_bytes - overhead, 0)
 
-    kept: list[Any] = []
-    used = 0
-    for item in items:
-        # +1 covers the inter-item comma in the JSON list.
-        cost = _byte_len(item) + 1
-        if used + cost > budget:
-            break
-        kept.append(item)
-        used += cost
+    kept = _fill(items, budget)
+    nested_limit = None
+    if not kept and items:
+        # Even the first item alone is over budget (e.g. one vulnerable
+        # device embedding 300+ vulnerabilities = 144 KB). Dropping it would
+        # return nothing, so trim the lists *inside* items instead.
+        for limit in _NESTED_LIMITS:
+            trimmed = [_trim_nested(item, limit) for item in items]
+            kept = _fill(trimmed, budget)
+            if kept:
+                nested_limit = limit
+                break
 
     capped = {**payload, list_key: kept}
     next_token = payload.get("nextPageToken")
@@ -154,7 +157,48 @@ def _truncate_paginated(
         "byteBudget": max_bytes,
         "hint": hint,
     }
+    if nested_limit is not None:
+        capped["_capped"]["nestedListsTrimmedTo"] = nested_limit
+        capped["_capped"]["hint"] = (
+            f"Items were too large to return whole: lists inside each item were cut to "
+            f"{nested_limit} entries (original counts in each item's `_trimmed`). Fetch one "
+            f"item's full data with a more specific tool (e.g. filter by its uuid). " + hint
+        )
     return capped
+
+
+# Nested-list sizes tried, largest first, when single items exceed the budget.
+_NESTED_LIMITS = (50, 20, 10, 5, 3, 1, 0)
+
+
+def _fill(items: list[Any], budget: int) -> list[Any]:
+    kept: list[Any] = []
+    used = 0
+    for item in items:
+        # +1 covers the inter-item comma in the JSON list.
+        cost = _byte_len(item) + 1
+        if used + cost > budget:
+            break
+        kept.append(item)
+        used += cost
+    return kept
+
+
+def _trim_nested(item: Any, limit: int) -> Any:
+    """Cut every list directly inside ``item`` to ``limit`` entries, recording original sizes."""
+    if not isinstance(item, dict):
+        return item
+    out: dict[str, Any] = {}
+    trimmed: dict[str, int] = {}
+    for key, value in item.items():
+        if isinstance(value, list) and len(value) > limit:
+            out[key] = value[:limit]
+            trimmed[key] = len(value)
+        else:
+            out[key] = value
+    if trimmed:
+        out["_trimmed"] = trimmed
+    return out
 
 
 def _hard_truncate(result: Any, max_bytes: int, original_bytes: int) -> dict[str, Any]:

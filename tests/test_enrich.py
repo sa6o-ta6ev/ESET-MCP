@@ -77,3 +77,9 @@ def test_description_with_real_newlines_untouched() -> None:
     incident = {"description": text}
     enrich(incident)
     assert incident["description"] == text
+
+
+def test_tags_with_only_empty_strings_become_empty_list() -> None:
+    devices = [{"tags": [""]}, {"tags": ["prod", ""]}, {"tags": []}]
+    enrich(devices)
+    assert [d["tags"] for d in devices] == [[], ["prod", ""], []]

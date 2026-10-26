@@ -39,7 +39,7 @@ cut down to a read-only, single-tenant server. See
   |---|---|
   | `eset_search(query, kinds?, limit_per_kind?)` | Case-insensitive substring matches across devices / users / policies / groups |
   | `device_full_profile(deviceUuid)` | Device record + its detections (last 30 days, newest first) + detection groups + vulnerabilities + recent scans |
-  | `incident_full_context(incidentUuid)` | Incident + comments + related detections + affected devices |
+  | `incident_full_context(incidentUuid)` | Incident (v2 + v3 merged) + comments + detections (v2, falling back to v1) + devices + indicators + MITRE technique IDs |
   | `latest_detections(hours=24, limit=10, severity_min?)` | Newest detections in a time window, sorted by `occurTime`; v2 → v1 fallback |
   | `policy_settings(policyUuid, path?, search?, include_history?, raw_flags?)` | A policy's settings decoded to plain JSON (see below) |
 
@@ -57,8 +57,15 @@ cut down to a read-only, single-tenant server. See
   was up to ~180 KB per policy). Decoder: `eset_mcp/policy_decode.py`.
 
 - Every generated tool accepts a `fields` list (server-side projection) and
-  responses are capped at `ESET_MCP_RESPONSE_BYTES_MAX` bytes, keeping
-  `nextPageToken` so the client can page on.
+  responses are capped at `ESET_MCP_RESPONSE_BYTES_MAX` bytes (compact JSON),
+  keeping `nextPageToken` so the client can page on. When a single item is
+  larger than the cap (a vulnerable device with 300+ vulnerabilities), the
+  lists inside items are shortened instead, with the original counts in
+  `_trimmed`.
+- Errors that mean "not available for this tenant" carry a `Likely cause`
+  line: 403 (permission set), 404 on a whole collection (module/API version
+  not offered), 501 (feature not enabled), 400 on IP sets (needs a "Common
+  features" policy). Operations ESET marks deprecated are not exposed.
 - **Data fixes** (`eset_mcp/enrich.py`), applied to every tool result -
   each verified against a real tenant; original values are kept:
   - version objects with only `name` filled ("13.3.1192.0", major/minor/patch
@@ -70,7 +77,8 @@ cut down to a read-only, single-tenant server. See
   - durations like `triageDuration: "339664.8s"` get `triageDurationHuman`
     ("3d 22h 21m");
   - incident descriptions with literal `\n` escapes are unescaped (never
-    when the text contains other backslashes, e.g. Windows paths).
+    when the text contains other backslashes, e.g. Windows paths);
+  - `tags: [""]` becomes `[]`.
 
   Policy change logs also split `user_id` (`"<uuid>;PR;PW;SR;SW;"`) into
   `user` and `userFlags`.

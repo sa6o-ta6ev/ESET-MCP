@@ -172,3 +172,24 @@ def test_projection_then_cap_keeps_more_items() -> None:
         f"projection should let more items fit under the cap "
         f"(fat={fat_kept}, skinny={skinny_kept})"
     )
+
+
+def test_cap_trims_nested_lists_when_single_item_exceeds_budget() -> None:
+    """One vulnerable device embedding hundreds of vulnerabilities must not yield []."""
+    vuln = {"cve": "CVE-2026-0001", "severity": "HIGH", "description": "x" * 300}
+    payload = {
+        "devices": [
+            {"uuid": "d1", "appVulnerabilities": [vuln] * 341, "osVulnerabilities": []},
+            {"uuid": "d2", "appVulnerabilities": [vuln], "osVulnerabilities": []},
+        ],
+        "nextPageToken": "t",
+    }
+    capped, truncated = cap_response_size(payload, 20_000)
+    assert truncated
+    assert capped["devices"], "devices must not come back empty"
+    first = capped["devices"][0]
+    assert first["uuid"] == "d1"
+    assert first["_trimmed"] == {"appVulnerabilities": 341}
+    assert len(first["appVulnerabilities"]) == capped["_capped"]["nestedListsTrimmedTo"]
+    assert capped["nextPageToken"] == "t"
+    assert len(json.dumps(capped).encode()) <= 20_000

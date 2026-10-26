@@ -319,3 +319,82 @@ async def test_generated_policy_tools_omit_encoded_blob(settings, eset_api) -> N
     text = result.content[0].text
     assert "policy_settings" in text
     assert _encoded_policy(PROXY_SETTINGS) not in text
+
+
+# --- availability hints ---
+async def test_unavailable_endpoint_errors_explain_the_cause(settings, eset_api) -> None:
+    eset_api.get("https://eu.quarantine-management.eset.systems/v1/quarantined-objects").mock(
+        return_value=httpx.Response(404))
+    eset_api.get("https://eu.incident-management.eset.systems/v2/edr-rules").mock(
+        return_value=httpx.Response(501))
+    eset_api.get("https://eu.incident-management.eset.systems/v2/detection-groups").mock(
+        return_value=httpx.Response(403))
+    eset_api.get(f"{DEVICES_URL}/missing").mock(return_value=httpx.Response(404))
+    pool, client = await _client_for(settings)
+    try:
+        async with client:
+            quarantine = await client.call_tool(TOOL_BY_PATH["/v1/quarantined-objects"], {})
+            edr = await client.call_tool(TOOL_BY_PATH["/v2/edr-rules"], {})
+            groups = await client.call_tool(TOOL_BY_PATH["/v2/detection-groups"], {})
+            missing = await client.call_tool(GET_DEVICE, {"deviceUuid": "missing"})
+    finally:
+        await pool.close()
+    assert "not available for this tenant" in quarantine.content[0].text
+    assert "not enabled for this tenant" in edr.content[0].text
+    assert "permission set" in groups.content[0].text
+    # A 404 for one UUID is a normal "not found", not an availability problem.
+    assert "Likely cause" not in missing.content[0].text
+
+
+# --- incident_full_context ---
+INCIDENTS = "https://eu.incident-management.eset.systems"
+
+
+async def test_incident_context_falls_back_to_v1_and_adds_v3_data(settings, eset_api) -> None:
+    eset_api.get(f"{INCIDENTS}/v2/incidents/i1").mock(return_value=httpx.Response(200, json={
+        "incident": {"uuid": "i1", "displayName": "Brute force", "detectionUuids": ["det1"],
+                     "deviceUuids": ["dev1"]}}))
+    eset_api.get(f"{INCIDENTS}/v3/incidents/i1").mock(return_value=httpx.Response(200, json={
+        "incident": {"uuid": "i1", "indicatorUuids": ["ind1"], "affectedAssets": [{"uuid": "dev1"}],
+                     "mitreTechniqueIds": ["T1110"]}}))
+    eset_api.get(f"{INCIDENTS}/v3/incidents/i1/comments").mock(
+        return_value=httpx.Response(200, json={"comments": []}))
+    eset_api.get(f"{INCIDENTS}/v3/incidents/i1/indicators").mock(
+        return_value=httpx.Response(200, json={"indicators": [{"uuid": "ind1"}]}))
+    eset_api.get(f"{INCIDENTS}/v2/detections/det1").mock(return_value=httpx.Response(404))
+    eset_api.get(f"{INCIDENTS}/v1/detections/det1").mock(
+        return_value=httpx.Response(200, json={"detection": {"uuid": "det1"}}))
+    eset_api.get(f"{DEVICES_URL}/dev1").mock(
+        return_value=httpx.Response(200, json={"device": {"uuid": "dev1", "tags": [""]}}))
+    pool, client = await _client_for(settings)
+    try:
+        async with client:
+            result = await client.call_tool("incident_full_context", {"incidentUuid": "i1"})
+    finally:
+        await pool.close()
+    assert not result.is_error
+    out = json.loads(result.content[0].text)
+    assert out["detections"] == [{"detection": {"uuid": "det1"}}]  # v1 fallback
+    assert out["mitreTechniqueIds"] == ["T1110"]
+    assert out["indicators"] == {"indicators": [{"uuid": "ind1"}]}
+    assert out["incident"]["displayName"] == "Brute force"
+    assert out["devices"][0]["device"]["tags"] == []  # enrichment applies to composites
+    assert out["sources"] == {"v2": "ok", "v3": "ok"}
+
+
+async def test_capped_response_stays_within_byte_budget(settings, eset_api, monkeypatch) -> None:
+    vuln = {"cve": "CVE-2026-0001", "severity": "HIGH", "description": "x" * 300}
+    devices = [{"uuid": f"d{i}", "appVulnerabilities": [vuln] * 200} for i in range(5)]
+    eset_api.get("https://eu.vulnerability-management.eset.systems/v1/vulnerable-devices").mock(
+        return_value=httpx.Response(200, json={"devices": devices, "nextPageToken": "t"}))
+    monkeypatch.setenv("ESET_MCP_RESPONSE_BYTES_MAX", "30000")
+    small = Settings.from_env(env_file=None)
+    pool, client = await _client_for(small)
+    try:
+        async with client:
+            result = await client.call_tool(TOOL_BY_PATH["/v1/vulnerable-devices"], {})
+    finally:
+        await pool.close()
+    text = result.content[0].text
+    assert len(text.encode("utf-8")) <= 30_000
+    assert json.loads(text)["devices"], "must return devices, not an empty list"

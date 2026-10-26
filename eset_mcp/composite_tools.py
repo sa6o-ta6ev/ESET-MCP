@@ -334,38 +334,85 @@ async def device_full_profile(http: EsetHttpClient, device_uuid: str) -> dict[st
 
 
 # --- Composite #3: full incident context ---
+_INCIDENT_FANOUT_CAP = 10
+
+
 async def incident_full_context(http: EsetHttpClient, incident_uuid: str) -> dict[str, Any]:
-    """Pull an incident with its comments, related detections, and affected devices.
+    """Pull an incident with comments, detections, devices, indicators and MITRE techniques.
 
-    To stay within rate limits we cap the number of fan-out fetches (detections
-    + devices) at 10 each - anything beyond that surfaces as a UUID list.
+    Combines both incident APIs (same incident UUIDs):
+
+    - v2 incident: ``detectionUuids`` / ``deviceUuids`` (only the single-incident
+      GET fills these; the v2 list returns them empty).
+    - v3 incident: ``indicatorUuids``, ``affectedAssets``, ``mitreTechniqueIds``.
+
+    Detections are fetched from v2 and, where v2 answers 404 (tenants without
+    the v2 detections API), from v1. Fan-out fetches are capped at 10 each to
+    stay within rate limits; ``truncated`` says when more exist.
     """
-    incident_path = f"/v2/incidents/{quote(incident_uuid, safe='')}"
-    try:
-        incident_resp = await http.request("GET", "incident-management", incident_path)
-    except EsetApiError as e:
-        return {"error": f"Incident fetch failed: {e}"}
+    quoted = quote(incident_uuid, safe="")
+    v2_path, v3_path = f"/v2/incidents/{quoted}", f"/v3/incidents/{quoted}"
+    v2_resp, v3_resp = await asyncio.gather(
+        _safe_get(http, "incident-management", v2_path),
+        _safe_get(http, "incident-management", v3_path),
+    )
+    v2 = None if _is_error(v2_resp) else v2_resp.get("incident", v2_resp)
+    v3 = None if _is_error(v3_resp) else v3_resp.get("incident", v3_resp)
+    if v2 is None and v3 is None:
+        return {"error": f"Incident fetch failed: v2 {v2_resp.get('_error')}; v3 {v3_resp.get('_error')}"}
 
-    incident = incident_resp.get("incident", incident_resp)
-    det_uuids = list(incident.get("detectionUuids") or [])[:10]
-    dev_uuids = list(incident.get("deviceUuids") or [])[:10]
+    det_all = list((v2 or {}).get("detectionUuids") or [])
+    dev_all = list((v2 or {}).get("deviceUuids") or [])
+    ind_count = len((v3 or {}).get("indicatorUuids") or [])
 
-    comments, detections, devices = await asyncio.gather(
-        _safe_get(http, "incident-management", f"{incident_path}/comments"),
-        _gather_by_uuid(http, "incident-management", "/v2/detections/{uuid}", det_uuids),
-        _gather_by_uuid(http, "device-management", "/v1/devices/{uuid}", dev_uuids),
+    comments, detections, devices, indicators = await asyncio.gather(
+        _safe_get(http, "incident-management", f"{v3_path if v3 else v2_path}/comments"),
+        _detections_with_v1_fallback(http, det_all[:_INCIDENT_FANOUT_CAP]),
+        _gather_by_uuid(http, "device-management", "/v1/devices/{uuid}", dev_all[:_INCIDENT_FANOUT_CAP]),
+        _safe_get(http, "incident-management", f"{v3_path}/indicators",
+                  query={"pageSize": _INCIDENT_FANOUT_CAP}) if ind_count else _empty(),
     )
 
+    incident = {**(v2 or {}), **(v3 or {})}  # v3 adds fields; shared fields agree
     return {
         "incident": incident,
+        "mitreTechniqueIds": (v3 or {}).get("mitreTechniqueIds") or [],
+        "affectedAssets": (v3 or {}).get("affectedAssets") or [],
         "comments": comments,
         "detections": detections,
         "devices": devices,
+        "indicators": indicators,
         "truncated": {
-            "detections": len(incident.get("detectionUuids") or []) > 10,
-            "devices": len(incident.get("deviceUuids") or []) > 10,
+            "detections": len(det_all) > _INCIDENT_FANOUT_CAP,
+            "devices": len(dev_all) > _INCIDENT_FANOUT_CAP,
+            "indicators": ind_count > _INCIDENT_FANOUT_CAP,
+        },
+        "sources": {
+            "v2": "ok" if v2 is not None else v2_resp.get("_error"),
+            "v3": "ok" if v3 is not None else v3_resp.get("_error"),
         },
     }
+
+
+async def _detections_with_v1_fallback(http: EsetHttpClient, uuids: list[str]) -> list[Any]:
+    """Fetch detections from v2; retry 404s on v1 (v2 detections may not be enabled)."""
+    results = await _gather_by_uuid(http, "incident-management", "/v2/detections/{uuid}", uuids)
+    missing = [i for i, r in enumerate(results) if isinstance(r, dict) and r.get("_status") == 404]
+    if missing:
+        retried = await _gather_by_uuid(
+            http, "incident-management", "/v1/detections/{uuid}", [uuids[i] for i in missing]
+        )
+        for i, r in zip(missing, retried, strict=True):
+            results[i] = r
+    return results
+
+
+async def _empty() -> list[Any]:
+    return []
+
+
+def _is_error(resp: Any) -> bool:
+    return isinstance(resp, dict) and "_error" in resp
 
 
 # --- Helpers ---
@@ -375,7 +422,7 @@ async def _safe_get(
     try:
         return await http.request("GET", service, path, query=query)
     except EsetApiError as e:
-        return {"_error": f"[{e.status}] {e.message}", "_endpoint": e.endpoint}
+        return {"_error": f"[{e.status}] {e.message}", "_status": e.status, "_endpoint": e.endpoint}
 
 
 async def _gather_by_uuid(

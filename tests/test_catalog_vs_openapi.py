@@ -11,7 +11,7 @@ from importlib import resources
 
 import pytest
 
-from eset_mcp.tools_loader import _EXCLUDED_SERVICES, _NON_SPEC_FILES, load_all_tools
+from eset_mcp.tools_loader import _EXCLUDED_SERVICES, _NON_SPEC_FILES, is_deprecated, load_all_tools
 
 pytestmark = pytest.mark.ro
 
@@ -26,7 +26,7 @@ def _count_get_operations_in_specs() -> int:
             continue
         spec = json.loads(entry.read_text(encoding="utf-8"))
         for _, ops in spec.get("paths", {}).items():
-            total += sum(1 for m in ops if m.lower() == "get")
+            total += sum(1 for m, op in ops.items() if m.lower() == "get" and not is_deprecated(op))
     return total
 
 
@@ -61,3 +61,8 @@ def test_every_tool_has_inputschema() -> None:
         # `properties` may be empty (e.g. /oauth/token without query params),
         # but the key must exist.
         assert "properties" in t.input_schema, f"{t.name}: properties key missing"
+
+
+def test_deprecated_operations_are_not_loaded() -> None:
+    paths = {t.path for t in load_all_tools()}
+    assert "/v2/role-assignments" not in paths  # iam "List roles", @deprecated by ESET
