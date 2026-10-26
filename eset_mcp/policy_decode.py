@@ -31,6 +31,9 @@ The format is not documented by ESET. Observed layout (2026-10, ESET Connect):
    sometimes with ``"ce_type"`` too. :func:`simplify` unwraps those to the
    bare value.
 
+Every variant is normalised to the same ``documents`` list (see
+:func:`decode_policy_data`), so callers never see which one was stored.
+
 Variants seen in one tenant's 84 policies:
 
 - archive format (above) - settings in ``*.lzma`` members, often with history;
@@ -117,13 +120,24 @@ def decode_policy_data(
 ) -> dict[str, Any]:
     """Decode one PolicyData ``data`` string.
 
-    Returns ``{"header", "info", "settings", "history", "members", "errors"}``:
+    Returns ``{"format", "documents", "info", "history", "members", "errors"}``.
 
-    - ``settings``: ``{member_name: document or [documents]}``, one entry per
-      ``*.lzma`` settings member, ``ce_value`` wrappers unwrapped unless
-      ``raw_flags`` and credentials redacted.
-    - ``history``: change log + list of stored earlier versions when
-      ``include_history``; otherwise just how many edits/versions exist.
+    ``documents`` has the same shape whatever the storage variant - one entry
+    per settings document::
+
+        {"source": "endpoint.lzma" | "inline" | "plain",
+         "target": "endpoint" | "feature.Connectivity" | ...,   # product or feature
+         "version": "10.1.2045.0" | None,                       # product version
+         "meta": {...} | None,                                  # format, written_by_ce, ...
+         "settings": {"Settings": {...}, ...}}                  # the settings tree
+
+    The product-level wrapper some variants add inside ``data`` is removed,
+    so the same setting has the same path in every variant. ``ce_value``
+    wrappers are unwrapped unless ``raw_flags``; credentials are redacted.
+
+    ``history``: change log + stored earlier versions when
+    ``include_history``; otherwise just how many edits/versions exist
+    (archive variant only).
 
     Raises :class:`PolicyDecodeError` only when not even the outer layers
     decode.
@@ -136,30 +150,32 @@ def decode_policy_data(
     ar_at = raw.find(_AR_MAGIC)
     prefix = raw if ar_at < 0 else raw[:ar_at]
     header_docs = _json_documents(prefix, errors, "header")
-    header = header_docs[0] if len(header_docs) == 1 else (header_docs or None)
+    header = header_docs[0] if len(header_docs) == 1 else None
 
     result: dict[str, Any] = {
-        "header": header,
+        "format": None,
+        "documents": [],
         "info": None,
-        "settings": {},
         "history": None,
         "members": [],
         "errors": errors,
     }
     if ar_at < 0:
         # No archive: the payload itself is the settings JSON.
-        if header_docs:
-            result["header"] = None
-            result["settings"]["settings"] = _finish(header_docs, raw_flags)
+        result["format"] = "plain"
+        result["documents"] = _to_documents("plain", header_docs, raw_flags)
+        if not result["documents"]:
+            errors.append("no settings found in the decoded policy data")
         return result
 
+    result["format"] = "archive"
     for member in parse_ar(raw[ar_at:]):
         result["members"].append({"name": member.name, "bytes": len(member.data)})
         name = member.name.lower()
         try:
             if name.endswith(".lzma"):
                 docs = _json_documents(_decompress_lzma_alone(member.data), errors, member.name)
-                result["settings"][member.name.removesuffix(".lzma")] = _finish(docs, raw_flags)
+                result["documents"].extend(_to_documents(member.name, docs, raw_flags))
             elif name == "info.json":
                 docs = _json_documents(member.data, errors, member.name)
                 result["info"] = docs[0] if len(docs) == 1 else docs
@@ -167,15 +183,58 @@ def decode_policy_data(
                 result["history"] = _decode_history(member.data, include_history, errors)
         except (lzma.LZMAError, ValueError, EOFError) as e:
             errors.append(f"{member.name}: {type(e).__name__}: {e}")
-    if not result["settings"] and _inline_settings(header):
+    if not result["documents"] and _inline_settings(header):
         # Format 2: the settings live in the header document itself
         # ({"policy": {"format": 2, "data": {...}}}) and the archive only
         # carries info.json.
-        result["settings"]["policy"] = _finish([header], raw_flags)
-        result["header"] = {"policy": {k: v for k, v in header["policy"].items() if k != "data"}}
-    if not result["settings"]:
+        result["format"] = "inline"
+        result["documents"] = _to_documents("inline", [header], raw_flags)
+    if not result["documents"]:
         errors.append("no settings found (no *.lzma member and no inline policy data)")
     return result
+
+
+_VERSION_PARTS = ("version_major", "version_minor", "version_build")
+_CE_VERSION_PARTS = ("ce_version_major", "ce_version_minor", "ce_version_build")
+
+
+def _to_documents(source: str, docs: list[Any], raw_flags: bool) -> list[dict[str, Any]]:
+    """Normalise raw settings documents to the common ``documents`` shape."""
+    out = []
+    for doc in docs:
+        policy = doc.get("policy") if isinstance(doc, dict) else None
+        if not isinstance(policy, dict) or not isinstance(policy.get("data"), dict):
+            # Unknown layout - pass it through rather than guess.
+            out.append({"source": source, "target": None, "version": None, "meta": None,
+                        "settings": _finish_tree(doc, raw_flags)})
+            continue
+        tree = policy["data"]
+        target = policy.get("product") or policy.get("feature")
+        version = policy.get("version") or _join_version(policy, _VERSION_PARTS)
+        # Plain/inline variants wrap the settings in one product-level key
+        # ({"endpoint": {"ce_version_major": ..., "Settings": {...}}}); the
+        # archive variant does not. Unwrap so paths match across variants.
+        if "format" in policy and len(tree) == 1:
+            (key, inner), = tree.items()
+            if isinstance(inner, dict):
+                target = target or key
+                version = version or _join_version(inner, _CE_VERSION_PARTS)
+                tree = {k: v for k, v in inner.items() if k not in _CE_VERSION_PARTS}
+        meta = {k: v for k, v in policy.items()
+                if k not in ("data", "product", "feature", "version", *_VERSION_PARTS)}
+        out.append({
+            "source": source,
+            "target": target,
+            "version": str(version) if version not in (None, "") else None,
+            "meta": meta or None,
+            "settings": _finish_tree(tree, raw_flags),
+        })
+    return out
+
+
+def _join_version(obj: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    parts = [simplify(obj[k]) for k in keys if k in obj]
+    return ".".join(str(p) for p in parts) if parts else None
 
 
 def _inline_settings(header: Any) -> bool:
@@ -380,11 +439,9 @@ def _json_documents(blob: bytes, errors: list[str], where: str) -> list[Any]:
     return docs
 
 
-def _finish(docs: list[Any], raw_flags: bool) -> Any:
-    docs = [redact_secrets(d) for d in docs]
-    if not raw_flags:
-        docs = [simplify(d) for d in docs]
-    return docs[0] if len(docs) == 1 else docs
+def _finish_tree(tree: Any, raw_flags: bool) -> Any:
+    tree = redact_secrets(tree)
+    return tree if raw_flags else simplify(tree)
 
 
 def _decode_history(blob: bytes, include: bool, errors: list[str]) -> dict[str, Any]:

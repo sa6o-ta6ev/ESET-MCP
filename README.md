@@ -45,7 +45,10 @@ cut down to a read-only, single-tenant server. See
 
 - **Policy settings.** ESET returns a policy's settings as an undocumented
   encoded blob (base64 → `ar` archive → LZMA → JSON, in three variants).
-  `policy_settings` decodes it on the server: `{ce_value, ce_flags}`
+  `policy_settings` decodes it on the server and normalises every variant
+  to the same shape: `decoded[].documents[]`, each `{source, target,
+  version, meta, settings}`, so a setting has the same path (e.g.
+  `Settings.Firewall`) whichever way ESET stored it. `{ce_value, ce_flags}`
   wrappers are unwrapped, credential-looking values are redacted, `path`
   selects a section, `search` finds settings by name or value, and
   `include_history` adds the change log (who changed which part, when).

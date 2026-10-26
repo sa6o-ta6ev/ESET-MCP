@@ -522,11 +522,12 @@ async def policy_settings(
 ) -> dict[str, Any]:
     """Fetch a policy and return its settings decoded to plain JSON.
 
-    ESET returns the settings as a multi-layer encoded blob (base64 → ar
-    archive → LZMA → JSON); see :mod:`eset_mcp.policy_decode`. ``path``
-    selects one section, ``search`` returns matching settings only. When the
-    full result would exceed ``max_bytes``, the settings are replaced by an
-    outline of their sections so the caller can narrow down with ``path``.
+    ESET returns the settings as a multi-layer encoded blob in one of several
+    storage variants; :mod:`eset_mcp.policy_decode` normalises them all to the
+    same ``documents`` list. ``path`` selects one section of each document,
+    ``search`` returns matching settings only. When the full result would
+    exceed ``max_bytes``, the settings are replaced by an outline of their
+    sections so the caller can narrow down with ``path``.
     """
     try:
         resp = await http.request(
@@ -556,41 +557,36 @@ async def policy_settings(
             continue
         entry: dict[str, Any] = {"product": container.get("product"), **d}
         if path:
-            entry["settings"] = {
-                name: _map_documents(docs, lambda doc: select_path(doc, path))
-                for name, docs in d["settings"].items()
-            }
+            for doc in entry["documents"]:
+                doc["settings"] = select_path(doc["settings"], path)
         if search:
             matches = []
-            for name, docs in d["settings"].items():
-                doc_list = docs if isinstance(docs, list) and len(docs) > 1 and all(isinstance(x, dict) for x in docs) else [docs]
-                for i, doc in enumerate(doc_list):
-                    prefix = name if len(doc_list) == 1 else f"{name}#{i}"
-                    for hit in search_settings(doc, search, _POLICY_SEARCH_LIMIT - len(matches)):
-                        matches.append({**hit, "path": f"{prefix}:{hit['path']}"})
-            entry["settings"] = None
+            for i, doc in enumerate(entry["documents"]):
+                for hit in search_settings(doc["settings"], search, _POLICY_SEARCH_LIMIT - len(matches)):
+                    matches.append({"document": i, **hit})
+                doc["settings"] = None
             entry["matches"] = matches
             entry["matchesTruncated"] = len(matches) >= _POLICY_SEARCH_LIMIT
         decoded.append(entry)
     result["decoded"] = decoded
 
-    if max_bytes and not path and not search and len(json.dumps(result, ensure_ascii=False)) > max_bytes:
-        for entry in decoded:
-            if entry.get("settings"):
-                entry["settings"] = {
-                    name: _map_documents(docs, lambda doc: outline(doc, depth=3))
-                    for name, docs in entry["settings"].items()
-                }
+    if max_bytes and not path and not search and _json_len(result) > max_bytes:
+        full = [[doc["settings"] for doc in entry.get("documents", [])] for entry in decoded]
+        # Deepest outline that fits; otherwise the generic size cap would
+        # drop the decoded entries altogether.
+        for depth in (3, 2, 1):
+            for entry, settings_list in zip(decoded, full, strict=True):
+                for doc, tree in zip(entry.get("documents", []), settings_list, strict=True):
+                    doc["settings"] = outline(tree, depth=depth)
+            if _json_len(result) <= max_bytes:
+                break
         result["note"] = (
             "Settings are too large to return in full; showing their section outline. "
-            "Call again with path='<section.subsection>' (e.g. a key from the outline) "
-            "or search='<text>' to get values."
+            "Call again with path='<section.subsection>' (e.g. 'Settings.Firewall' from the "
+            "outline) or search='<text>' to get values."
         )
     return result
 
 
-def _map_documents(docs: Any, fn: Any) -> Any:
-    """Apply ``fn`` to one settings document, or to each when there are several."""
-    if isinstance(docs, list) and len(docs) > 1 and all(isinstance(d, dict) for d in docs):
-        return [fn(d) for d in docs]
-    return fn(docs)
+def _json_len(obj: Any) -> int:
+    return len(json.dumps(obj, ensure_ascii=False).encode("utf-8"))

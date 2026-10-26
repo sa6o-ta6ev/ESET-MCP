@@ -65,8 +65,12 @@ def setting(value, flags=4, ce_type=None):
     return out
 
 
-CURRENT = {"ech": {"Settings": {"Proxy": {"Port": setting(3128), "Password": setting("WLu/j7qfjrQLDBjv4Q==")}}}}
-OLDER = {"ech": {"Settings": {"Proxy": {"Port": setting(3128, ce_type=6)}}}}
+# Archive variant: {"policy": {"product", "version", "data": <settings>}}, no product wrapper.
+CURRENT = {"policy": {"product": "ech", "version": "4.2.0", "data": {
+    "Settings": {"Proxy": {"Port": setting(3128), "Password": setting("WLu/j7qfjrQLDBjv4Q==")}}}}}
+OLDER = {"policy": {"product": "ech", "version": "1.0.0", "data": {
+    "Settings": {"Proxy": {"Port": setting(3128, ce_type=6)}}}}}
+FEATURE = {"policy": {"feature": "Connectivity", "version": "1.0", "data": {"Mode": setting(2)}}}
 CHANGELOG = {"changes": [{"change_id": "c1", "user_id": "u1", "timestamp": 1792591079,
                           "modified_parts": ["Proxy"], "orig_data": "1.ar.xz"}]}
 
@@ -78,7 +82,7 @@ def archive_policy() -> str:
     ])
     archive = ar([
         ("ech.lzma", lzma_alone(json.dumps(CURRENT) + json.dumps(OLDER))),
-        ("feature.Connectivity.lzma", lzma_alone(json.dumps({"Connectivity": {"Mode": setting(2)}}))),
+        ("feature.Connectivity.lzma", lzma_alone(json.dumps(FEATURE))),
         ("info.json", json.dumps({"written_by_ce": "12.1", "compatibility": ["ech>=1.0"]}).encode()),
         ("history.ar", history),
     ])
@@ -89,17 +93,19 @@ def archive_policy() -> str:
 def test_archive_format_decodes_all_members() -> None:
     d = decode_policy_data(archive_policy(), include_history=True)
     assert d["errors"] == []
-    assert d["header"] == {"policy": {"format": 1}}
+    assert d["format"] == "archive"
     assert d["info"]["written_by_ce"] == "12.1"
     # Long member name resolved through the GNU // table.
     assert {m["name"] for m in d["members"]} == {"ech.lzma", "feature.Connectivity.lzma", "info.json", "history.ar"}
     # Two documents (current + older product version), wrappers unwrapped incl. ce_type.
-    current, older = d["settings"]["ech"]
-    assert current["ech"]["Settings"]["Proxy"]["Port"] == 3128
-    assert older["ech"]["Settings"]["Proxy"]["Port"] == 3128
-    assert d["settings"]["feature.Connectivity"] == {"Connectivity": {"Mode": 2}}
+    current, older, feature = d["documents"]
+    assert (current["source"], current["target"], current["version"]) == ("ech.lzma", "ech", "4.2.0")
+    assert older["version"] == "1.0.0"
+    assert current["settings"]["Settings"]["Proxy"]["Port"] == 3128
+    assert older["settings"]["Settings"]["Proxy"]["Port"] == 3128
+    assert (feature["target"], feature["settings"]) == ("Connectivity", {"Mode": 2})
     # Credentials are redacted.
-    assert current["ech"]["Settings"]["Proxy"]["Password"] == REDACTED
+    assert current["settings"]["Settings"]["Proxy"]["Password"] == REDACTED
 
 
 def test_history_change_log_with_readable_times() -> None:
@@ -113,9 +119,9 @@ def test_history_change_log_with_readable_times() -> None:
 
 def test_raw_flags_keeps_wrappers_but_still_redacts() -> None:
     d = decode_policy_data(archive_policy(), raw_flags=True)
-    current = d["settings"]["ech"][0]
-    assert current["ech"]["Settings"]["Proxy"]["Port"] == {"ce_value": 3128, "ce_flags": 4}
-    assert current["ech"]["Settings"]["Proxy"]["Password"]["ce_value"] == REDACTED
+    proxy = d["documents"][0]["settings"]["Settings"]["Proxy"]
+    assert proxy["Port"] == {"ce_value": 3128, "ce_flags": 4}
+    assert proxy["Password"]["ce_value"] == REDACTED
 
 
 def test_format2_inline_settings() -> None:
@@ -124,25 +130,29 @@ def test_format2_inline_settings() -> None:
     }}}
     raw = json.dumps(header).encode() + ar([("info.json", b'{"written_by_ce": "2075.3"}')])
     d = decode_policy_data(base64.b64encode(raw).decode())
-    assert d["errors"] == []
-    settings = d["settings"]["policy"]["policy"]["data"]["efs_unix"]
-    assert settings["Settings"]["LiveGrid"]["LiveGridEnabled"] == 1
-    assert settings["ce_version_major"] == 10  # sibling metadata is not a wrapper
-    assert "data" not in d["header"]["policy"]
+    assert d["errors"] == [] and d["format"] == "inline"
+    [doc] = d["documents"]
+    # Product wrapper removed, version taken from ce_version_*: same shape as archive.
+    assert (doc["source"], doc["target"], doc["version"]) == ("inline", "efs_unix", "10")
+    assert doc["meta"] == {"format": 2, "written_by_ce": "2075.3"}
+    assert doc["settings"] == {"Settings": {"LiveGrid": {"LiveGridEnabled": 1}}}
 
 
 def test_plain_json_format() -> None:
-    doc = {"policy": {"format": "1", "data": {"eesa": {"Settings": {"Enabled": setting(True)}}}}}
+    doc = {"policy": {"format": "1", "version_major": "8", "version_minor": "1", "version_build": "2",
+                      "data": {"eesa": {"Settings": {"Enabled": setting(True)}}}}}
     d = decode_policy_data(double_b64(json.dumps(doc).encode()))
-    assert d["errors"] == [] and d["members"] == []
-    assert d["settings"]["settings"]["policy"]["data"]["eesa"]["Settings"]["Enabled"] is True
+    assert d["errors"] == [] and d["members"] == [] and d["format"] == "plain"
+    [out] = d["documents"]
+    assert (out["source"], out["target"], out["version"]) == ("plain", "eesa", "8.1.2")
+    assert out["settings"] == {"Settings": {"Enabled": True}}
 
 
 def test_compressed_flag_xz_payload() -> None:
-    doc = {"policy": {"format": "1", "data": {"x": setting(1)}}}
+    doc = {"policy": {"format": "1", "data": {"x": {"Enabled": setting(1)}}}}
     blob = base64.b64encode(lzma.compress(json.dumps(doc).encode(), format=lzma.FORMAT_XZ)).decode()
     d = decode_policy_data(blob, compressed=True)
-    assert d["settings"]["settings"]["policy"]["data"]["x"] == 1
+    assert d["documents"][0]["settings"] == {"Enabled": 1}
 
 
 def test_not_base64_raises() -> None:
@@ -155,6 +165,22 @@ def test_bad_member_is_reported_not_fatal() -> None:
     d = decode_policy_data(base64.b64encode(b'{"policy":{"format":1}}' + archive).decode())
     assert d["info"] == {"a": 1}
     assert any("ech.lzma" in e for e in d["errors"])
+
+
+def test_all_variants_give_the_same_document_shape() -> None:
+    plain = {"policy": {"format": "1", "data": {"ech": {"Settings": {"Proxy": {"Port": setting(3128)}}}}}}
+    inline = json.dumps({"policy": {"format": 2, "data": {"ech": {"Settings": {"Proxy": {"Port": setting(3128)}}}}}})
+    variants = [
+        decode_policy_data(archive_policy()),
+        decode_policy_data(double_b64(json.dumps(plain).encode())),
+        decode_policy_data(base64.b64encode(inline.encode() + ar([("info.json", b"{}")])).decode()),
+    ]
+    for d in variants:
+        doc = d["documents"][0]
+        assert set(doc) == {"source", "target", "version", "meta", "settings"}
+        assert doc["target"] == "ech"
+        # Same setting, same path, whatever the storage variant.
+        assert select_path(doc["settings"], "Settings.Proxy.Port") == 3128
 
 
 def test_parse_ar_bsd_long_names() -> None:

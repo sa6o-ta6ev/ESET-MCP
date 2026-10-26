@@ -187,12 +187,13 @@ _COMPOSITE_TOOLS: list[Tool] = [
         description=(
             "A policy's settings decoded to plain JSON. ESET's get/list policy endpoints only "
             "return the settings as an encoded blob (omitted from their output) - use this "
-            "tool to read what a policy actually configures. Returns policy metadata, the "
-            "product it targets, console/product version info, and the settings per settings "
-            "file (several documents = the same settings written for different product "
-            "versions). Setting wrappers {ce_value, ce_flags} are unwrapped to the value; "
-            "credential-looking values are redacted. Large policies return a section outline - "
-            "then call again with `path` or `search`."
+            "tool to read what a policy actually configures. Returns policy metadata and "
+            "`decoded[].documents[]`, each {source, target (product or feature), version "
+            "(product version the settings are written for), meta, settings}. The shape is the "
+            "same for every policy; several documents = the same settings written for "
+            "different product versions. Setting wrappers {ce_value, ce_flags} are unwrapped "
+            "to the value; credential-looking values are redacted. Large policies return a "
+            "section outline - then call again with `path` or `search`."
         ),
         input_schema={
             "type": "object",
@@ -201,8 +202,8 @@ _COMPOSITE_TOOLS: list[Tool] = [
                 "path": {
                     "type": "string",
                     "description": (
-                        "Optional dotted path inside each settings document, e.g. "
-                        "'policy.data.Settings.Firewall' or 'list[0].name'."
+                        "Optional dotted path inside each document's settings, e.g. "
+                        "'Settings.Firewall' or 'Settings.Firewall.Rules[0].name'."
                     ),
                 },
                 "search": {

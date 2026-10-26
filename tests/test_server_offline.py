@@ -270,7 +270,7 @@ async def test_policy_settings_decodes_and_filters(settings, eset_api) -> None:
             full = await client.call_tool("policy_settings", {"policyUuid": "p1"})
             found = await client.call_tool("policy_settings", {"policyUuid": "p1", "search": "port"})
             section = await client.call_tool(
-                "policy_settings", {"policyUuid": "p1", "path": "policy.data.ech.Settings.Proxy"}
+                "policy_settings", {"policyUuid": "p1", "path": "Settings.Proxy"}
             )
     finally:
         await pool.close()
@@ -279,11 +279,12 @@ async def test_policy_settings_decodes_and_filters(settings, eset_api) -> None:
     assert "omitted" in out["policy"]["configuration"]["data"]
     [entry] = out["decoded"]
     assert entry["product"] == "eset.local.products.ech"
-    proxy = entry["settings"]["settings"]["policy"]["data"]["ech"]["Settings"]["Proxy"]
-    assert proxy == {"Port": 3128, "Password": "[redacted]"}
+    [doc] = entry["documents"]
+    assert doc["target"] == "ech"
+    assert doc["settings"]["Settings"]["Proxy"] == {"Port": 3128, "Password": "[redacted]"}
     matches = json.loads(found.content[0].text)["decoded"][0]["matches"]
-    assert matches == [{"path": "settings:policy.data.ech.Settings.Proxy.Port", "value": 3128}]
-    picked = json.loads(section.content[0].text)["decoded"][0]["settings"]["settings"]
+    assert matches == [{"document": 0, "path": "Settings.Proxy.Port", "value": 3128}]
+    picked = json.loads(section.content[0].text)["decoded"][0]["documents"][0]["settings"]
     assert picked == {"Port": 3128, "Password": "[redacted]"}
 
 
@@ -301,8 +302,8 @@ async def test_policy_settings_outline_when_too_large(settings, eset_api, monkey
         await pool.close()
     out = json.loads(result.content[0].text)
     assert "path=" in out["note"]
-    settings_outline = out["decoded"][0]["settings"]["settings"]["policy"]["data"]
-    assert settings_outline == {"ech": "{1 keys}"}
+    settings_outline = out["decoded"][0]["documents"][0]["settings"]
+    assert settings_outline["Settings"]["Section0"] == "{40 keys}"
 
 
 async def test_generated_policy_tools_omit_encoded_blob(settings, eset_api) -> None:
