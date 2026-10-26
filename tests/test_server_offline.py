@@ -233,10 +233,12 @@ async def test_resources_are_readable(settings, eset_api) -> None:
             for r in resources:
                 content = await client.read_resource(str(r.uri))
                 assert content.contents[0].text
-            region = await client.read_resource("eset://config/region")
+            tenants = await client.read_resource("eset://config/tenants")
     finally:
         await pool.close()
-    assert region.contents[0].text == "eu"
+    assert json.loads(tenants.contents[0].text) == [
+        {"id": "default", "name": "default", "region": "eu", "deployment": "cloud"}
+    ]
 
 
 # --- policies ---

@@ -20,6 +20,9 @@ services:
       - "127.0.0.1:${ESET_MCP_PORT:-8765}:8765"
     volumes:
       - eset-mcp-data:/data
+      # Several tenants: tenants.toml + one password file per tenant, read-only.
+      # Used when .env sets ESET_TENANTS_FILE=/tenants/tenants.toml.
+      - ./tenants:/tenants:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8765), 2)"]
       interval: 10s

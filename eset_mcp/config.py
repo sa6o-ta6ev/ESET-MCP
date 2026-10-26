@@ -18,8 +18,12 @@ VALID_REGIONS: tuple[Region, ...] = ("eu", "de", "us", "ca", "jpn")
 
 @dataclass(frozen=True)
 class Settings:
+    # Single tenant: the API user from .env. Ignored when tenants_file is set.
     user: str
     password: str
+    # Several tenants: path to a TOML tenants file (see credentials.py).
+    # Empty string = single-tenant mode.
+    tenants_file: str
     region: Region
     transport: Transport
     http_host: str
@@ -84,10 +88,14 @@ class Settings:
 
         transport = _parse_transport(os.getenv("ESET_MCP_TRANSPORT", "stdio"))
 
+        tenants_file = os.path.expanduser(os.getenv("ESET_TENANTS_FILE", "").split("#", 1)[0].strip())
         user = os.getenv("ESET_USER", "")
         password = os.getenv("ESET_PASSWORD", "")
-        if not user or not password:
-            raise RuntimeError("ESET_USER and ESET_PASSWORD are required in .env.")
+        if not tenants_file and (not user or not password):
+            raise RuntimeError(
+                "Set ESET_USER and ESET_PASSWORD in .env (single tenant), "
+                "or ESET_TENANTS_FILE (several tenants)."
+            )
 
         deployment = _parse_deployment(os.getenv("ESET_DEPLOYMENT", "cloud"))
         onprem_server_url_raw = os.getenv("ESET_ONPREM_SERVER_URL", "").strip()
@@ -111,6 +119,7 @@ class Settings:
         return cls(
             user=user,
             password=password,
+            tenants_file=tenants_file,
             region=_parse_region(os.getenv("ESET_REGION", "eu")),
             transport=transport,
             http_host=os.getenv("ESET_MCP_HTTP_HOST", "127.0.0.1"),

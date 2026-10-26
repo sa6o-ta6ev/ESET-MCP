@@ -18,6 +18,7 @@ cut down to a read-only, single-tenant server. See
 - [What it exposes](#what-it-exposes)
 - [Quick start (local, Claude Code)](#quick-start-local-claude-code)
 - [Configuration](#configuration)
+- [Several tenants](#several-tenants)
 - [Usage statistics](#usage-statistics)
 - [On-prem ESET PROTECT](#on-prem-eset-protect)
 - [HTTP transport](#http-transport)
@@ -82,8 +83,8 @@ cut down to a read-only, single-tenant server. See
 
   Policy change logs also split `user_id` (`"<uuid>;PR;PW;SR;SW;"`) into
   `user` and `userFlags`.
-- **Resources**: `eset://config/region`, `eset://config/deployment`,
-  `eset://config/tools-catalog`, `eset://docs/rate-limits`.
+- **Resources**: `eset://config/tenants`, `eset://config/tools-catalog`,
+  `eset://docs/rate-limits`.
 - **Prompts**: `audit_inactive_devices(days)`, `vulnerability_report`,
   `incident_triage`.
 
@@ -137,7 +138,8 @@ All settings live in `.env` (see [`.env.example`](.env.example)).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ESET_USER` / `ESET_PASSWORD` | - (required) | Dedicated API user |
+| `ESET_USER` / `ESET_PASSWORD` | - | Dedicated API user (single tenant) |
+| `ESET_TENANTS_FILE` | - | Tenants file for several tenants (see [Several tenants](#several-tenants)); overrides the three above |
 | `ESET_REGION` | `eu` | Cloud region: `eu` / `de` / `us` / `ca` / `jpn` |
 | `ESET_DEPLOYMENT` | `cloud` | `cloud` (ESET Connect) or `onprem` (PROTECT On-Prem) |
 | `ESET_ONPREM_SERVER_URL` | - | `https://host[:port]` of the on-prem console (required for `onprem`) |
@@ -151,6 +153,51 @@ All settings live in `.env` (see [`.env.example`](.env.example)).
 | `ESET_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` (logs go to stderr) |
 | `ESET_MCP_LOG_FORMAT` | `text` | `text` or `json` |
 | `ESET_MCP_METRICS_ENABLED` / `_PATH` | `false` / `/metrics` | Prometheus endpoint (HTTP transport only) |
+
+## Several tenants
+
+One server can serve several customers' ESET Business Accounts (cloud only
+for now). Credentials stay on the server; Claude only ever sees tenant ids
+and names.
+
+```bash
+mkdir -p tenants
+cp tenants.example.toml tenants/tenants.toml      # one [[tenant]] per customer
+printf '%s' 'the-api-password' > tenants/acme.password   # one file per tenant
+make secure-tenants      # owner = container user (uid 10001), dir 700, files 600
+# in .env:  ESET_TENANTS_FILE=/tenants/tenants.toml
+make restart
+make check-tenants       # which endpoints work for which tenant
+```
+
+```toml
+[[tenant]]
+id = "acme"                       # what Claude passes as `tenant`
+name = "ACME Ltd"
+region = "eu"
+user = "api-mcp@acme.example"     # dedicated read-only API user per customer
+password_file = "acme.password"   # relative to tenants.toml
+```
+
+- Every tool gets a required `tenant` argument (an enum of the configured
+  ids); `list_tenants` returns ids, names and regions. Each tenant has its
+  own login, token and 10 req/s rate limit.
+- Passwords are refused inside `tenants.toml`; each lives in its own file,
+  read on use - rotating a password means replacing its file, no restart.
+  Adding or removing tenants needs `make restart`. The server warns if a
+  password file is readable by group/others.
+- `tenants/` is git- and docker-ignored and mounted read-only.
+- `make check-tenants` (`eset-mcp-check`) logs in as every tenant, calls
+  each list endpoint once (GET, `pageSize=1`) and prints a status matrix;
+  `differs` marks endpoints that work for some tenants but not others
+  (licence / permission set), errors in every column point at the API.
+- `make stats-by-tenant` breaks usage and failures down per tenant.
+- The storage is behind a provider interface
+  (`eset_mcp/credentials.py`), so a secrets manager can replace the file
+  without touching the rest of the server.
+
+Without `ESET_TENANTS_FILE` the server stays single-tenant (`ESET_USER` /
+`ESET_PASSWORD` from `.env`) and tools take no `tenant` argument.
 
 ## Usage statistics
 

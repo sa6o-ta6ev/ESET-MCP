@@ -60,6 +60,7 @@ metrics = [
 # After `pip install .` we get `eset-mcp` on PATH.
 eset-mcp = "eset_mcp.__main__:main"
 eset-mcp-stats = "eset_mcp.observability.usage:main"
+eset-mcp-check = "eset_mcp.check_tenants:main"
 
 [project.urls]
 Homepage = "https://github.com/maciekaz/ESET-MCP"

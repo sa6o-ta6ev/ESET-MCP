@@ -6,7 +6,7 @@ import logging
 
 from .client_pool import ClientPool
 from .config import Settings
-from .credentials import EnvCredentialResolver
+from .credentials import build_provider
 from .observability import configure_logging, log_event
 from .server import build_server
 
@@ -36,9 +36,13 @@ def main() -> None:
 
 async def _run(settings: Settings) -> None:
     pool = ClientPool(settings)
-    resolver = EnvCredentialResolver(settings)
+    provider = build_provider(settings)
+    log_event(
+        logging.getLogger("eset_mcp"), "tenants_loaded",
+        tenants=[t.id for t in provider.tenants()], multi_tenant=provider.multi_tenant,
+    )
 
-    server = build_server(settings, pool, resolver)
+    server = build_server(settings, pool, provider)
     try:
         if settings.transport == "stdio":
             from mcp.server.stdio import stdio_server

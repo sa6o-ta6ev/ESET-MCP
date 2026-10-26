@@ -13,7 +13,7 @@ def test_record_usage_appends_one_line_per_call(tmp_path) -> None:
     lines = path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     first = json.loads(lines[0])
-    assert set(first) == {"ts", "tool", "ok", "status", "duration_ms"}
+    assert set(first) == {"ts", "tool", "tenant", "ok", "status", "duration_ms"}
 
 
 def test_record_usage_never_raises(tmp_path) -> None:
@@ -37,3 +37,13 @@ def test_summarize_counts_per_tool_sorted_by_calls() -> None:
     assert (a["calls"], a["ok"], a["failed"], a["avg_ms"]) == (3, 1, 2, 20)
     assert a["last"] == "2026-10-26T13:00:00+00:00"
     assert a["failures"] == {"404": 2}
+
+
+def test_summarize_by_tenant_groups_per_tenant() -> None:
+    def rec(tenant: str, tool: str, ok: bool, status: str = "ok") -> str:
+        return json.dumps({"ts": "2026-10-27T10:00:00+00:00", "tool": tool, "tenant": tenant,
+                           "ok": ok, "status": status, "duration_ms": 10})
+    lines = [rec("globex", "q", False, "404"), rec("acme", "q", True), rec("acme", "d", True), rec("acme", "d", True)]
+    rows = summarize(lines, by_tenant=True)
+    assert [r["tool"] for r in rows] == ["acme / d", "acme / q", "globex / q"]
+    assert rows[2]["failures"] == {"404": 1}

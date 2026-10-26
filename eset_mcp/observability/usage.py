@@ -4,12 +4,14 @@ Works on every transport (unlike Prometheus, which needs HTTP), and survives
 restarts, so it answers "which tools get used, and how often do they fail"
 over days or weeks of local use.
 
-Each record holds only: timestamp, tool name, ok flag, status, duration.
-Never arguments, results, usernames or tenant data.
+Each record holds only: timestamp, tool name, tenant id, ok flag, status,
+duration. Never arguments, results or credentials.
 
 Summarise with::
 
-    eset-mcp-stats [path]        # path defaults to $ESET_MCP_USAGE_LOG
+    eset-mcp-stats [path]               # per tool; path defaults to $ESET_MCP_USAGE_LOG
+    eset-mcp-stats --by-tenant [path]   # per tenant and tool - e.g. which errors
+                                        # happen for every tenant vs only some
 """
 from __future__ import annotations
 
@@ -24,11 +26,14 @@ from pathlib import Path
 _LOG = logging.getLogger("eset_mcp.usage")
 
 
-def record_usage(path: str, *, tool: str, ok: bool, status: str, duration_ms: int) -> None:
+def record_usage(
+    path: str, *, tool: str, ok: bool, status: str, duration_ms: int, tenant: str = ""
+) -> None:
     """Append one usage record. Best-effort: failures are logged, never raised."""
     record = {
         "ts": _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
         "tool": tool,
+        "tenant": tenant,
         "ok": ok,
         "status": status,
         "duration_ms": duration_ms,
@@ -42,8 +47,8 @@ def record_usage(path: str, *, tool: str, ok: bool, status: str, duration_ms: in
         _LOG.exception("could not write usage record to %s", path)
 
 
-def summarize(lines: list[str]) -> list[dict[str, object]]:
-    """Aggregate usage records per tool, most-called first."""
+def summarize(lines: list[str], by_tenant: bool = False) -> list[dict[str, object]]:
+    """Aggregate usage records per tool (or per tenant + tool), most-called first."""
     stats: dict[str, dict[str, object]] = defaultdict(
         lambda: {"calls": 0, "ok": 0, "failed": 0, "total_ms": 0, "last": "", "statuses": defaultdict(int)}
     )
@@ -51,6 +56,8 @@ def summarize(lines: list[str]) -> list[dict[str, object]]:
         try:
             rec = json.loads(line)
             tool = rec["tool"]
+            if by_tenant:
+                tool = f"{rec.get('tenant') or '-'} / {tool}"
         except (ValueError, KeyError, TypeError):
             continue
         s = stats[tool]
@@ -71,24 +78,32 @@ def summarize(lines: list[str]) -> list[dict[str, object]]:
             "last": s["last"],
             "failures": dict(s["statuses"]),  # type: ignore[call-overload]
         })
-    rows.sort(key=lambda r: (-int(r["calls"]), str(r["tool"])))  # type: ignore[call-overload]
+    def order(r: dict[str, object]) -> tuple[str, int, str]:
+        group = str(r["tool"]).split(" / ", 1)[0] if by_tenant else ""
+        return (group, -int(r["calls"]), str(r["tool"]))  # type: ignore[call-overload]
+
+    rows.sort(key=order)
     return rows
 
 
 def main() -> None:
     """``eset-mcp-stats`` entry point: print a per-tool table."""
-    path = sys.argv[1] if len(sys.argv) > 1 else os.getenv("ESET_MCP_USAGE_LOG", "")
+    args = sys.argv[1:]
+    by_tenant = "--by-tenant" in args
+    args = [a for a in args if a != "--by-tenant"]
+    path = args[0] if args else os.getenv("ESET_MCP_USAGE_LOG", "")
     if not path:
-        sys.exit("usage: eset-mcp-stats <usage-log.jsonl>  (or set ESET_MCP_USAGE_LOG)")
+        sys.exit("usage: eset-mcp-stats [--by-tenant] <usage-log.jsonl>  (or set ESET_MCP_USAGE_LOG)")
     p = Path(os.path.expanduser(path))
     if not p.exists():
         sys.exit(f"no usage log at {p}")
-    rows = summarize(p.read_text(encoding="utf-8").splitlines())
+    rows = summarize(p.read_text(encoding="utf-8").splitlines(), by_tenant=by_tenant)
     if not rows:
         print("no tool calls recorded yet")
         return
-    width = max(len("tool"), *(len(str(r["tool"])) for r in rows))
-    print(f"{'tool':<{width}}  {'calls':>6}  {'ok':>6}  {'failed':>6}  {'avg_ms':>7}  last call (UTC)       failures")
+    label = "tenant / tool" if by_tenant else "tool"
+    width = max(len(label), *(len(str(r["tool"])) for r in rows))
+    print(f"{label:<{width}}  {'calls':>6}  {'ok':>6}  {'failed':>6}  {'avg_ms':>7}  last call (UTC)       failures")
     for r in rows:
         failures = ", ".join(f"{k}x{v}" for k, v in r["failures"].items())  # type: ignore[attr-defined]
         print(

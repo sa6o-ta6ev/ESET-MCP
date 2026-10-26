@@ -40,7 +40,7 @@ async def test_resources_exposed(mcp_session) -> None:
     async with mcp_session() as client:
         resources = await client.list_resources()
         uris = {str(r.uri) for r in resources.resources}
-        assert "eset://config/region" in uris
+        assert "eset://config/tenants" in uris
         assert "eset://config/tools-catalog" in uris
 
 

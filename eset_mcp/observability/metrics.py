@@ -2,7 +2,7 @@
 
 Metric inventory (all prefixed ``esetmcp_``):
 
-- ``tool_calls_total{tool, deployment, status}`` - counter
+- ``tool_calls_total{tool, tenant, deployment, status}`` - counter
 - ``tool_duration_seconds{tool, deployment}`` - histogram
 - ``token_refresh_total{deployment, reason}`` - counter
 - ``http_retries_total{deployment, status}`` - counter
@@ -12,7 +12,8 @@ Metric inventory (all prefixed ``esetmcp_``):
 
 Label cardinality rules:
 
-- ``tool``: bounded - one value per registered tool (~100).
+- ``tool``: bounded - one value per registered tool (~60).
+- ``tenant``: bounded - one value per configured tenant.
 - ``deployment``: ``"cloud"`` | ``"onprem"``.
 - ``status``: HTTP status code as a string (``"200"``, ``"404"``, …) or
   ``"exception"`` for unhandled exceptions in the dispatch layer.
@@ -57,7 +58,7 @@ if _METRICS_AVAILABLE:
     _TOOL_CALLS = Counter(
         "esetmcp_tool_calls_total",
         "Total MCP tool calls dispatched",
-        labelnames=("tool", "deployment", "status"),
+        labelnames=("tool", "tenant", "deployment", "status"),
     )
     _TOOL_DURATION = Histogram(
         "esetmcp_tool_duration_seconds",
@@ -94,9 +95,9 @@ if _METRICS_AVAILABLE:
 
 
 # --- Public no-op-safe helpers ---
-def inc_tool_call(tool: str, deployment: str, status: str | int) -> None:
+def inc_tool_call(tool: str, deployment: str, status: str | int, tenant: str = "") -> None:
     if _METRICS_AVAILABLE:
-        _TOOL_CALLS.labels(tool=tool, deployment=deployment, status=str(status)).inc()
+        _TOOL_CALLS.labels(tool=tool, tenant=tenant, deployment=deployment, status=str(status)).inc()
 
 
 def observe_tool_duration(tool: str, deployment: str, seconds: float) -> None:

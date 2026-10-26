@@ -1,0 +1,22 @@
+# Copy to tenants/tenants.toml (mkdir tenants) and set ESET_TENANTS_FILE=/tenants/tenants.toml in .env.
+#
+# One [[tenant]] per customer. Passwords are NOT allowed in this file: put each
+# in its own file next to it (one line, the password only), then run
+# `make secure-tenants` so only the container user can read them.
+#
+# Use a dedicated read-only ESET API user per customer (Integrations enabled).
+# Cloud tenants only for now.
+
+[[tenant]]
+id = "acme"                       # lowercase letters, digits, - or _; what Claude passes as `tenant`
+name = "ACME Ltd"                 # shown to Claude by list_tenants
+region = "eu"                     # eu / de / us / ca / jpn - the customer's ESET Business Account region
+user = "api-mcp@acme.example"
+password_file = "acme.password"   # relative to this file
+
+[[tenant]]
+id = "globex"
+name = "Globex Corporation"
+region = "us"
+user = "api-mcp@globex.example"
+password_file = "globex.password"

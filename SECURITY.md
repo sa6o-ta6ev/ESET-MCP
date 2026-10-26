@@ -31,11 +31,16 @@ Issues in the original project can also be reported upstream:
   looks like a credential (password, secret, token, private key) are
   replaced with `[redacted]`; ESET stores them encrypted anyway.
   `tests/test_policy_decode.py`.
-- **Usage log carries no data.** Records hold tool name, success flag,
+- **Usage log carries no data.** Records hold tool name, tenant id, success flag,
   status and duration only - never arguments or results.
   `tests/test_usage.py`.
-- **No secrets on disk** beyond `.env` itself. OAuth tokens live in process
-  memory only.
+- **No secrets on disk** beyond `.env` / the tenant password files. OAuth
+  tokens live in process memory only.
+- **Tenant credentials never reach the model.** `list_tenants` and the
+  tenants resource expose id, name, region and deployment only. Passwords
+  are refused inside `tenants.toml` and kept one per file; the server warns
+  when a password file is readable by group/others.
+  `tests/test_multi_tenant.py`.
 - **Stateless HTTP transport.** No MCP sessions, so nothing to hijack or
   leak between clients.
 
@@ -44,10 +49,15 @@ dependency or SAST scanning in CI, secret scanning.
 
 ## Operator checklist
 
-1. Use a **dedicated** ESET API user with a **read-only** permission set.
+1. Use a **dedicated** ESET API user with a **read-only** permission set -
+   one per customer when serving several tenants, so one leaked password
+   exposes one customer.
    That is the control ESET itself enforces; the server's read-only design
    is a second layer.
-2. Keep `.env` readable only by you (`chmod 600 .env`).
+2. Keep `.env` readable only by you (`chmod 600 .env`), and run
+   `make secure-tenants` after changing anything in `tenants/`. Whoever
+   controls the host can read every tenant's credentials: keep other
+   services off it and admin access short.
 3. Keep the HTTP transport on `127.0.0.1`, or put an authenticating proxy
    in front of it. It has no authentication of its own.
 4. Leave `ESET_ONPREM_VERIFY_SSL=true` unless the console uses a

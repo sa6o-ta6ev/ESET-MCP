@@ -39,3 +39,6 @@ logs/
 
 # ───────── Tool-usage log (ESET_MCP_USAGE_LOG) ─────────
 *.jsonl
+
+# ───────── Tenant credentials (never commit) ─────────
+tenants/

@@ -6,6 +6,7 @@ composite tools only fan out GET requests.
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import time
@@ -46,6 +47,7 @@ from .composite_tools import (
     policy_settings,
 )
 from .config import Settings
+from .credentials import DEFAULT_TENANT_ID, CredentialProvider, Tenant, TenantError
 from .enrich import enrich
 from .errors import EsetApiError
 from .http_client import EsetHttpClient
@@ -237,18 +239,40 @@ _COMPOSITE_TOOLS: list[Tool] = [
 
 _POLICY_BLOB_HINT = "call policy_settings with this policy's uuid to read the decoded settings"
 
+_LIST_TENANTS_TOOL = Tool(
+    name="list_tenants",
+    description=(
+        "List the ESET tenants (customers) this server can query: id, name, region. Every "
+        "other tool needs one of these ids as its `tenant` argument. If the user has not said "
+        "which customer they mean, ask rather than guess."
+    ),
+    input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+    annotations=_READ_ONLY.model_copy(update={"title": "List ESET tenants"}),
+)
+
+_MULTI_TENANT_PROMPT_NOTE = (
+    "\nThis server serves several tenants: pass `tenant` on every call "
+    "(ids from `list_tenants`); ask the user which customer if it is unclear.\n"
+)
+
+
+def _with_tenant_arg(tool: Tool, tenants: list[Tenant]) -> Tool:
+    """Copy of ``tool`` whose schema requires a ``tenant`` argument."""
+    schema = copy.deepcopy(tool.input_schema)
+    schema.setdefault("properties", {})["tenant"] = {
+        "type": "string",
+        "enum": [t.id for t in tenants],
+        "description": "Tenant (customer) to query: " + ", ".join(f"{t.id} = {t.name}" for t in tenants),
+    }
+    schema["required"] = [*schema.get("required", []), "tenant"]
+    return tool.model_copy(update={"input_schema": schema})
+
 _RESOURCES: list[Resource] = [
     Resource(
-        uri="eset://config/region",
-        name="ESET region",
-        description="API region (eu/de/us/ca/jpn). Only meaningful for cloud deployments.",
-        mime_type="text/plain",
-    ),
-    Resource(
-        uri="eset://config/deployment",
-        name="ESET deployment kind",
-        description="'cloud' (ESET Connect API) or 'onprem' (customer-hosted ESET PROTECT console).",
-        mime_type="text/plain",
+        uri="eset://config/tenants",
+        name="ESET tenants",
+        description="Tenants this server serves: id, name, region, deployment (no credentials).",
+        mime_type="application/json",
     ),
     Resource(
         uri="eset://config/tools-catalog",
@@ -293,23 +317,33 @@ class _ToolError(Exception):
         self.status = status
 
 
-def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
+def build_server(settings: Settings, pool: ClientPool, provider: CredentialProvider) -> Server:
     """Build an mcp Server instance with every capability wired up.
 
-    `resolver` is anything with a no-arg ``resolve() -> Credentials`` method
-    (see eset_mcp.credentials). `pool` is the shared ClientPool.
+    `provider` supplies credentials per tenant (see eset_mcp.credentials):
+    with several tenants every tool gets a required ``tenant`` argument and
+    ``list_tenants`` is added. `pool` is the shared ClientPool, keyed by
+    credentials, so each tenant gets its own login, token and rate limit.
     """
     tools = load_all_tools()
     tools_by_name = {t.name: t for t in tools}
+    tenants = provider.tenants()
+    tenants_by_id = {t.id: t for t in tenants}
     mcp_tools = [*_COMPOSITE_TOOLS, *(_tool_to_mcp(t) for t in tools)]
+    if provider.multi_tenant:
+        mcp_tools = [_LIST_TENANTS_TOOL, *(_with_tenant_arg(t, tenants) for t in mcp_tools)]
     schemas = {t.name: t.input_schema for t in mcp_tools}
     # The low-level Server does not validate tool arguments, so we do. Unknown
     # OpenAPI keywords (nullable, readOnly, ...) are ignored by jsonschema.
     validators = {name: validator_for(schema)(schema) for name, schema in schemas.items()}
 
-    async def _http() -> EsetHttpClient:
-        """Resolve current request's credentials → fetch a pooled client."""
-        return await pool.get(resolver.resolve())
+    async def _http(tenant_id: str | None) -> EsetHttpClient:
+        """Resolve the tenant's credentials → fetch its pooled client."""
+        try:
+            creds = provider.resolve(tenant_id)
+        except TenantError as e:
+            raise _ToolError(str(e), status="tenant_error") from e
+        return await pool.get(creds)
 
     # --- TOOLS ---
     async def on_list_tools(
@@ -320,7 +354,9 @@ def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
     async def on_call_tool(_ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
         name = params.name
         t0 = time.monotonic()
-        deployment = settings.deployment
+        tenant_id = (params.arguments or {}).get("tenant") if provider.multi_tenant else DEFAULT_TENANT_ID
+        tenant = tenants_by_id.get(str(tenant_id))
+        deployment = tenant.deployment if tenant else "unknown"
         status = "error"
         bytes_out = 0
         try:
@@ -344,7 +380,9 @@ def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
             # that a misbehaving metrics registry or formatter cannot
             # turn a successful tool call into an error for the agent.
             try:
-                _emit_tool_call_telemetry(settings, name, deployment, status, t0, bytes_out)
+                _emit_tool_call_telemetry(
+                    settings, name, str(tenant_id or ""), deployment, status, t0, bytes_out
+                )
             except Exception:  # observability MUST be best-effort
                 _LOG.exception("telemetry emission failed for tool=%s", name)
 
@@ -357,7 +395,13 @@ def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
                 f"{'/'.join(map(str, e.path)) or '(arguments)'}: {e.message}" for e in errors[:5]
             )
             raise _ToolError(f"Invalid arguments for {name}: {details}", status="invalid_arguments")
-        http = await _http()
+        tenant_id = arguments.pop("tenant", None)
+        if name == "list_tenants":
+            return _to_text({"tenants": [
+                {"id": t.id, "name": t.name, "region": t.region, "deployment": t.deployment}
+                for t in tenants
+            ]})
+        http = await _http(tenant_id)
 
         # `fields` is a *synthetic* parameter we add to every generated tool
         # (see tools_loader._build_input_schema). It is a server-side
@@ -403,13 +447,12 @@ def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
     ) -> ReadResourceResult:
         uri = str(params.uri)
         mime_type = "text/plain"
-        if uri == "eset://config/region":
-            text = resolver.resolve().region
-        elif uri == "eset://config/deployment":
-            # For on-prem credentials we surface the server URL too - it's
-            # the only useful "where am I" hint the agent has.
-            creds = resolver.resolve()
-            text = f"onprem ({creds.server_url})" if creds.deployment == "onprem" else "cloud"
+        if uri == "eset://config/tenants":
+            text = json.dumps([
+                {"id": t.id, "name": t.name, "region": t.region, "deployment": t.deployment}
+                for t in tenants
+            ])
+            mime_type = "application/json"
         elif uri == "eset://config/tools-catalog":
             catalog = [
                 {
@@ -475,6 +518,8 @@ def build_server(settings: Settings, pool: ClientPool, resolver: Any) -> Server:
             )
         else:
             raise ValueError(f"Unknown prompt: {name}")
+        if provider.multi_tenant:
+            text += _MULTI_TENANT_PROMPT_NOTE
         return GetPromptResult(
             description=name,
             messages=[PromptMessage(role="user", content=TextContent(type="text", text=text))],
@@ -592,17 +637,18 @@ def _to_text(result: Any) -> str:
 
 
 def _emit_tool_call_telemetry(
-    settings: Settings, name: str, deployment: str, status: str, t0: float, bytes_out: int
+    settings: Settings, name: str, tenant: str, deployment: str, status: str, t0: float, bytes_out: int
 ) -> None:
     """Emit the metric, log and usage-file records for a finished tool call."""
     duration_s = time.monotonic() - t0
-    inc_tool_call(tool=name, deployment=deployment, status=status)
+    inc_tool_call(tool=name, tenant=tenant, deployment=deployment, status=status)
     observe_tool_duration(tool=name, deployment=deployment, seconds=duration_s)
     if bytes_out > 0:
         observe_response_bytes(tool=name, deployment=deployment, n_bytes=bytes_out)
     log_event(
         _LOG, "tool_call",
         tool=name,
+        tenant=tenant,
         deployment=deployment,
         status=status,
         duration_ms=int(duration_s * 1000),
@@ -612,6 +658,7 @@ def _emit_tool_call_telemetry(
         record_usage(
             settings.usage_log_path,
             tool=name,
+            tenant=tenant,
             ok=status == "ok",
             status=status,
             duration_ms=int(duration_s * 1000),
